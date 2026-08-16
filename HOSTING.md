@@ -37,6 +37,8 @@ public sealed class ShellEngine;
 public sealed class ShellSession;
 public sealed class ShellCompilation;
 public sealed class ShellValue;
+public abstract record ShellResultValue;
+public readonly record struct RuntimeFaultCode;
 
 public sealed class DescriptorSet;
 public sealed class TypeDescriptor;
@@ -49,6 +51,7 @@ public sealed class CommandDescriptor;
 public sealed class InputPortDescriptor;
 public sealed class ArgumentDescriptor;
 public sealed class OutputPortDescriptor;
+public sealed class RuntimeFaultDescriptor;
 
 public sealed class CompilationDiagnostic;
 public sealed class RuntimeFault;
@@ -101,6 +104,8 @@ The engine MUST include core types and compiler intrinsics in every catalog. A h
 
 An engine instance MAY compile scripts for several sessions. Descriptors are shared across those sessions.
 
+A `DescriptorSet` can contain types, globals, commands, and runtime fault descriptors. The engine validates their references as one atomic set.
+
 ## 5. Descriptor catalog
 
 ### 5.1 Symbol identity
@@ -118,6 +123,7 @@ The catalog maintains these name groups:
 - Types
 - Globals
 - Commands and intrinsics
+- Runtime fault codes
 - Members within each receiver type
 - Enum members within each enum type
 
@@ -196,7 +202,22 @@ The engine owns the `Array<T>` and `Result<T,E>` type constructors. A host regis
 
 The engine represents `Array<T>` as an immutable finite sequence of `ShellValue` items. It MUST NOT expose a mutable CLR array to script operations.
 
-The engine represents `Result<T,E>` as one success value or one typed error value.
+The engine represents `Result<T,E>` with one non-null `ShellResultValue` variant:
+
+```csharp
+public abstract record ShellResultValue
+{
+    public sealed record Success(ShellValue Value) : ShellResultValue;
+    public sealed record VoidSuccess : ShellResultValue;
+    public sealed record Error(ShellValue Value) : ShellResultValue;
+}
+```
+
+`Success.Value` MUST be assignable to `T` when `T` is a value type. `VoidSuccess` is valid only when `T` is `Void`.
+
+`Error.Value` MUST be assignable to `E`.
+
+The outer `ShellValue.Value` stores the non-null variant object. `VoidSuccess` does not contain a `ShellValue` payload.
 
 A host cannot register a new generic type constructor in version 0.1.
 
@@ -341,6 +362,7 @@ public sealed class CommandDescriptor
     public IReadOnlyList<ArgumentDescriptor> Arguments { get; }
     public IReadOnlyList<OutputPortDescriptor> Outputs { get; }
     public ShellTypeId? ErrorType { get; }
+    public IReadOnlyList<RuntimeFaultCode> RuntimeFaults { get; }
     public CommandInvoker Invoke { get; }
 }
 ```
@@ -402,6 +424,33 @@ An invoker can return a declared error type or any registered subtype of it.
 
 An invoker without `ErrorType` MUST NOT return a declared error outcome.
 
+### 10.6 Declared runtime faults
+
+A `RuntimeFaultDescriptor` defines one deliberate host-command fault:
+
+```csharp
+public readonly record struct RuntimeFaultCode(string Value);
+
+public sealed class RuntimeFaultDescriptor
+{
+    public RuntimeFaultCode Code { get; }
+    public string Name { get; }
+    public string Description { get; }
+}
+```
+
+A host code has a prefix and four decimal digits. The prefix contains 2 to 16 uppercase ASCII letters, digits, or `_` characters.
+
+The first prefix character MUST be a letter. A host prefix MUST NOT be `SL`.
+
+`Name` MUST be a valid ShellLang identifier. `GAME1001` is a valid host code.
+
+Core language runtime faults keep the `SL4xxx` range.
+
+Runtime fault codes and names MUST be unique in one catalog. A command lists each runtime fault code that it can return.
+
+A runtime fault is not a declared error type. A script cannot store, propagate, or recover from it.
+
 ## 11. Command invocation boundary
 
 ### 11.1 InvocationContext
@@ -450,6 +499,10 @@ public abstract record CommandOutcome
         IReadOnlyDictionary<string, ShellValue> Outputs) : CommandOutcome;
 
     public sealed record Error(ShellValue Value) : CommandOutcome;
+
+    public sealed record Fault(
+        RuntimeFaultCode Code,
+        string Message) : CommandOutcome;
 }
 ```
 
@@ -457,15 +510,25 @@ A successful outcome MUST contain every declared output exactly once. It MUST NO
 
 A zero-output success contains an empty output map.
 
+For a fallible zero-output command, the runtime converts that empty success to `ShellResultValue.VoidSuccess`.
+
+For a non-fallible zero-output command, the runtime produces terminal `Void` without a `ShellValue`.
+
 An error outcome MUST contain a value assignable to the command's declared error type.
 
+A fault outcome MUST use a runtime fault code listed by the command descriptor. Its message MUST be non-empty and safe for scripts.
+
 The engine validates an outcome before the script can use it.
+
+An undeclared fault outcome is a host fault. It is not a command runtime fault.
 
 ### 11.4 Fault containment
 
 The engine MUST catch exceptions from globals, adapters, members, queries, equality delegates, ordering delegates, commands, and execution observers.
 
 It converts these exceptions to `HostFault` values. It MUST preserve the original exception for trusted host diagnostics.
+
+The engine converts a valid `CommandOutcome.Fault` to `RuntimeFault`. It adds the invocation source and array-index path.
 
 ShellLang source MUST receive a safe host-selected message. The runtime MUST NOT expose stack traces or private CLR values by default.
 
@@ -538,6 +601,8 @@ The example is not permission to infer names, descriptions, ports, defaults, or 
 13. Every command and query has one synchronous invoker.
 14. Every member has one synchronous getter.
 15. No host descriptor declares generic command type parameters.
+16. Every runtime fault code and name is valid and unique.
+17. Every command runtime fault reference resolves to a registered fault descriptor.
 
 A failed registration returns one or more `HostingDiagnostic` items. It MUST report all independent validation errors that it can find safely.
 
@@ -619,6 +684,8 @@ Stable diagnostic codes use these groups:
 
 Removing or changing the meaning of a published code requires a later language version.
 
+Host runtime fault codes use their registered host prefix. They do not use an `SL` diagnostic range.
+
 ## 16. Execution
 
 ### 16.1 ExecutionResult
@@ -665,6 +732,8 @@ The runtime commits one assignment only after its right side completes without a
 
 A typed `Err` completes normally and can be committed as a Result value.
 
+A command-generated runtime fault aborts execution. The runtime does not convert it to an `Err`.
+
 When a later statement faults, earlier assignments remain in the session. Earlier host command effects also remain.
 
 The runtime MUST NOT execute a statement after a runtime or host fault.
@@ -693,6 +762,18 @@ A command MUST NOT call `Execute` recursively with the active session. The engin
 
 A declared error outcome contains a typed error value and a list of immutable context frames.
 
+A `RuntimeFault` contains a stable code, a safe message, a source span, and immutable context frames.
+
+```csharp
+public sealed class RuntimeFault
+{
+    public RuntimeFaultCode Code { get; }
+    public string Message { get; }
+    public SourceSpan Source { get; }
+    public IReadOnlyList<ErrorContextFrame> Context { get; }
+}
+```
+
 A context frame can identify:
 
 - A command or query
@@ -708,6 +789,8 @@ Adding a frame does not change the error's nominal ShellLang type.
 
 A `RuntimeFault` and `HostFault` use the same context frame format. A host fault can also retain a private CLR exception.
 
+A command-generated runtime fault receives the active invocation source span and array-index path.
+
 ## 18. Metadata, help, and completion
 
 The engine MUST expose descriptors and compiler intrinsics through one read-only metadata model.
@@ -720,6 +803,7 @@ The engine MUST expose descriptors and compiler intrinsics through one read-only
 - Arguments, required flags, and defaults
 - Output ports and the default output
 - Declared error type
+- Declared runtime fault codes and descriptions
 - Members or enum values when applicable
 
 `GetCompletions` MUST use the parser and static context. It SHOULD suggest:
@@ -779,3 +863,15 @@ A conforming host test suite MUST cover these cases:
 14. Run lifted invocations on the caller thread in array order.
 15. Evaluate command arguments once before lifted invocation.
 16. Expose intrinsics through help and completion metadata.
+17. Store normal Result success in `ShellResultValue.Success`.
+18. Store `Result<Void,E>` success in `ShellResultValue.VoidSuccess` without a payload.
+19. Reject `VoidSuccess` for a Result whose success type is not `Void`.
+20. Reject construction of `Array<Void>`.
+21. Lift a non-fallible zero-output operation over empty, populated, and nested arrays.
+22. Produce `VoidSuccess` after an empty or fully successful fallible terminal lift.
+23. Stop a fallible terminal lift at the first `Err` and preserve its index path.
+24. Preserve terminal output through an outer Result.
+25. Stop a lifted command at the first declared runtime fault.
+26. Add the failing primary array-index path to a command runtime fault.
+27. Convert an undeclared command fault code to a host fault.
+28. Keep invoker exceptions classified as host faults.

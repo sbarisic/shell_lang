@@ -4,9 +4,17 @@ This example is the first script that runs after a game host loads a map. It pre
 
 The host must register every referenced global, type, member, enum, and command. The main globals are `map : GameMap`, `world : GameWorld`, `local_player : Player`, `game_rules : GameRules`, `encounter_director : EncounterDirector`, and `navigation : NavigationSystem`.
 
-`find_entities(classname:)` returns map markers. `spawn_monster` accepts one marker, so its pipeline maps over all `info_monster_spawn` locations. `choose_random_spawn` accepts the complete marker array, so it runs once.
+`find_entities(classname:)` returns `Array<MapMarker>` for every classname. This broad return type is an intentional host tradeoff for this example.
 
-State-changing commands return typed Results in this host. The script uses `require` when a failure must stop map startup. The fenced script contains 280 physical lines.
+Marker-specific commands validate `MapMarker.classname`. A mismatch returns the declared `GAME1001` runtime fault and aborts the compilation.
+
+Default-input mutation commands return their primary input on success. This fluent rule makes a lifted mutation return `Result<Array<T>,E>` instead of `Result<Void,E>`.
+
+Zero-input effects return `Result<Void,E>`. The script uses `require` when a failure must stop map startup.
+
+Seed arguments are channel seeds. Per-entity commands derive a local seed from the channel seed and the entity's stable identity.
+
+The fenced script contains 280 physical lines.
 
 ## Script
 
@@ -293,4 +301,233 @@ log_map_started(
     -> require
 ```
 
-The example uses no hidden control flow. Descriptor types decide whether an operation consumes a complete array or maps over its elements.
+The example uses no explicit general-purpose control flow. Array lifting and collection intrinsics provide iteration.
+
+Result propagation conditionally skips operations after an `Err`. Descriptor types decide whether an operation consumes a complete array or maps over elements.
+
+## Assumed host descriptor catalog
+
+This catalog is normative for this example only. It is not part of the ShellLang standard library.
+
+The signature tables use `default` for a default input port. They use `<-` for additional input ports and `:` for arguments.
+
+### Globals
+
+| Name | Type |
+| --- | --- |
+| `map` | `GameMap` |
+| `world` | `GameWorld` |
+| `local_player` | `Player` |
+| `game_rules` | `GameRules` |
+| `encounter_director` | `EncounterDirector` |
+| `navigation` | `NavigationSystem` |
+
+### Registered members and output records
+
+| Receiver | Member | Type |
+| --- | --- | --- |
+| `GameMap` | `name` | `String` |
+| `GameMap` | `seed` | `UInt64` |
+| `GameRules` | `difficulty` | `Difficulty` |
+| `MapMarker` | `classname` | `String` |
+| `MapMarker` | `name` | `String` |
+| `MapMarker` | `position` | `Vector3` |
+| `MapMarker` | `spawn_order` | `Int32` |
+| `MapMarker` | `stable_id` | `UInt64` |
+| `Monster` | `rank` | `MonsterRank` |
+| `Monster` | `group` | `String` |
+| `Monster` | `stable_id` | `UInt64` |
+| `Player` | `name` | `String` |
+| `Player` | `position` | `Vector3` |
+| `ValidateNavigation.Output` | `summary` | `String` |
+| `ValidateNavigation.Output` | `is_complete` | `Bool` |
+| `SpawnPlayer.Output` | `player` | `Player` and default output |
+| `SpawnPlayer.Output` | `camera` | `Camera` |
+
+`ValidateNavigation.Output` has no default output. Both output records are nominal and immutable.
+
+### Enums
+
+| Type | Members used by the script |
+| --- | --- |
+| `Difficulty` | Supplied by `game_rules.difficulty` |
+| `WorldTransitionReason` | `MapBootstrap`, `MapBootstrapComplete` |
+| `RespawnPolicy` | `Checkpoint` |
+| `MonsterFaction` | `Hostile` |
+| `SpawnReason` | `MapStart` |
+| `MonsterRank` | `Boss`, `Elite` |
+| `SpawnFacing` | `MarkerAngles` |
+| `CameraMode` | `FirstPerson` |
+| `GrantSource` | `MapLoadout` |
+| `Weapon` | `Crowbar`, `Pistol`, `Shotgun`, `SubmachineGun`, `Crossbow` |
+| `AmmoType` | `PistolRounds`, `ShotgunShells`, `SmgRounds`, `CrossbowBolts` |
+| `Item` | `Flashlight`, `Binoculars`, `MapScanner`, `RepairTool`, `FieldRadio`, `AccessCardBlue`, `Medkit`, `ArmorBattery`, `HandGrenade`, `ProximityMine`, `EmergencyBeacon` |
+| `ObjectivePriority` | `Primary`, `Optional` |
+| `WakeReason` | `PlayerSpawned` |
+
+### Error types and runtime faults
+
+The example uses this single-parent error hierarchy:
+
+```text
+Error
+└── GameError
+    ├── WorldError
+    ├── MapError
+    │   ├── NavigationError
+    │   └── SpawnError
+    ├── EncounterError
+    ├── PlayerError
+    │   └── InventoryError
+    ├── ObjectiveError
+    ├── AudioError
+    ├── UIError
+    └── TelemetryError
+```
+
+Core `EmptyCollectionError` derives directly from `Error`. The `first` intrinsic uses it.
+
+The host also registers this runtime fault:
+
+| Code | Name | Meaning |
+| --- | --- | --- |
+| `GAME1001` | `MapMarkerKindMismatch` | A marker-specific command received the wrong `MapMarker.classname`. |
+
+An empty valid marker array is not a kind mismatch. Commands use typed errors for expected failures such as no available player spawn.
+
+### Core intrinsics used
+
+| Intrinsic | Signature |
+| --- | --- |
+| `where` | `Array<T>, predicate: T -> Bool -> Array<T>` |
+| `sort` | `Array<T>, by: T -> K -> Array<T>` |
+| `count` | `Array<T> -> Int32` |
+| `first` | `Array<T> -> Result<T,EmptyCollectionError>` |
+| `require` | `Result<T,E> -> T` |
+
+### Bootstrap and world commands
+
+| Command | Default input | Explicit inputs | Arguments | Output |
+| --- | --- | --- | --- | --- |
+| `print` | `Any` | — | — | `Void` |
+| `set_loading_stage` | — | — | `name: String` | `Result<Void,WorldError>` |
+| `derive_seed` | — | — | `base: UInt64`, `channel: String` | `UInt64` |
+| `find_entities` | — | — | `classname: String` | `Array<MapMarker>` |
+| `pause_simulation` | `GameWorld` | — | `reason: WorldTransitionReason` | `Result<GameWorld,WorldError>` |
+| `disable_player_input` | `GameWorld` | — | — | `Result<GameWorld,WorldError>` |
+| `enable_player_input` | `GameWorld` | — | — | `Result<GameWorld,WorldError>` |
+| `resume_simulation` | `GameWorld` | — | `reason: WorldTransitionReason` | `Result<GameWorld,WorldError>` |
+| `clear_transient_entities` | `GameWorld` | — | `keep_players: Bool` | `Result<GameWorld,WorldError>` |
+| `set_time_scale` | `GameWorld` | — | `scale: Float32` | `Result<GameWorld,WorldError>` |
+| `set_gravity` | `GameWorld` | — | `scale: Float32` | `Result<GameWorld,WorldError>` |
+| `set_friendly_fire` | `GameRules` | — | `enabled: Bool` | `Result<GameRules,WorldError>` |
+| `set_respawn_policy` | `GameRules` | — | `policy: RespawnPolicy` | `Result<GameRules,WorldError>` |
+| `set_monster_scaling` | `GameRules` | — | `difficulty: Difficulty` | `Result<GameRules,WorldError>` |
+
+### Navigation and marker commands
+
+| Command | Default input | Explicit inputs | Arguments | Output |
+| --- | --- | --- | --- | --- |
+| `validate_player_spawns` | `Array<MapMarker>` | `navigation <- NavigationSystem` | — | `Result<Array<MapMarker>,NavigationError>` |
+| `validate_monster_spawns` | `Array<MapMarker>` | `navigation <- NavigationSystem` | — | `Result<Array<MapMarker>,NavigationError>` |
+| `validate_navigation` | `NavigationSystem` | `map <- GameMap` | — | `Result<ValidateNavigation.Output,NavigationError>` |
+| `require_true` | `Bool` | — | `message: String` | `Result<Bool,MapError>` |
+| `activate_navigation` | `NavigationSystem` | `map <- GameMap` | — | `Result<NavigationSystem,NavigationError>` |
+| `choose_random_spawn` | `Array<MapMarker>` | — | `seed: UInt64` | `Result<MapMarker,SpawnError>` |
+
+`validate_player_spawns`, `validate_monster_spawns`, and `choose_random_spawn` declare `GAME1001`.
+
+### Monster commands
+
+| Command | Default input | Explicit inputs | Arguments | Output |
+| --- | --- | --- | --- | --- |
+| `spawn_monster` | `MapMarker` | `director <- EncounterDirector` | `difficulty: Difficulty`, `faction: MonsterFaction`, `reason: SpawnReason`, `seed: UInt64`, `start_awake: Bool` | `Result<Monster,SpawnError>` |
+| `attach_to_encounter` | `Monster` | `director <- EncounterDirector` | — | `Result<Monster,EncounterError>` |
+| `initialize_monster_ai` | `Monster` | `navigation <- NavigationSystem` | `seed: UInt64` | `Result<Monster,EncounterError>` |
+| `assign_patrol_routes` | `Monster` | `routes <- Array<MapMarker>` | `seed: UInt64` | `Result<Monster,EncounterError>` |
+| `set_health_multiplier` | `Monster` | — | `multiplier: Float32` | `Result<Monster,EncounterError>` |
+| `set_damage_multiplier` | `Monster` | — | `multiplier: Float32` | `Result<Monster,EncounterError>` |
+| `give_monster_armor` | `Monster` | — | `amount: Int32` | `Result<Monster,EncounterError>` |
+| `set_monster_dormant` | `Monster` | — | `dormant: Bool` | `Result<Monster,EncounterError>` |
+| `set_guard_radius` | `Monster` | — | `radius: Float32` | `Result<Monster,EncounterError>` |
+| `wake_monster` | `Monster` | — | `reason: WakeReason` | `Result<Monster,EncounterError>` |
+
+`spawn_monster` declares `GAME1001` for its default marker. `assign_patrol_routes` declares it for each route marker.
+
+`assign_patrol_routes` is scalar over `Monster`. Array lifting reuses the complete route array and channel seed for each monster.
+
+### Loot and checkpoint commands
+
+| Command | Default input | Explicit inputs | Arguments | Output |
+| --- | --- | --- | --- | --- |
+| `spawn_loot` | `MapMarker` | — | `difficulty: Difficulty`, `seed: UInt64` | `Result<Loot,SpawnError>` |
+| `register_checkpoint` | `MapMarker` | `game_rules <- GameRules` | — | `Result<MapMarker,MapError>` |
+| `set_initial_checkpoint` | `GameRules` | `checkpoint <- MapMarker` | — | `Result<GameRules,MapError>` |
+
+All three commands declare `GAME1001` for their marker input.
+
+### Player, camera, and inventory commands
+
+| Command | Default input | Explicit inputs | Arguments | Output |
+| --- | --- | --- | --- | --- |
+| `spawn_player` | `MapMarker` | `player <- Player`, `world <- GameWorld` | `facing: SpawnFacing`, `protection_seconds: Float32` | `Result<SpawnPlayer.Output,SpawnError>` |
+| `set_camera_mode` | `Camera` | — | `mode: CameraMode` | `Result<Camera,PlayerError>` |
+| `fade_from_black` | `Camera` | — | `seconds: Float32` | `Result<Camera,PlayerError>` |
+| `set_max_health` | `Player` | — | `amount: Int32` | `Result<Player,PlayerError>` |
+| `heal` | `Player` | — | `amount: Int32` | `Result<Player,PlayerError>` |
+| `set_max_armor` | `Player` | — | `amount: Int32` | `Result<Player,PlayerError>` |
+| `give_armor` | `Player` | — | `amount: Int32` | `Result<Player,PlayerError>` |
+| `set_inventory_capacity` | `Player` | — | `slots: Int32` | `Result<Player,InventoryError>` |
+| `give_credits` | `Player` | — | `amount: Int32` | `Result<Player,InventoryError>` |
+| `grant_weapon_to` | `Weapon` | `player <- Player` | `condition: Float32`, `source: GrantSource` | `Result<Weapon,InventoryError>` |
+| `give_ammo` | `Player` | — | `ammo: AmmoType`, `amount: Int32` | `Result<Player,InventoryError>` |
+| `equip_weapon` | `Player` | — | `weapon: Weapon` | `Result<Player,InventoryError>` |
+| `grant_item_to` | `Item` | `player <- Player` | `count: Int32`, `source: GrantSource` | `Result<Item,InventoryError>` |
+| `give_item` | `Player` | — | `item: Item`, `count: Int32` | `Result<Player,InventoryError>` |
+| `show_message` | `Player` | — | `text: String`, `duration_seconds: Float32` | `Result<Player,UIError>` |
+
+`spawn_player` declares `GAME1001` for its default marker.
+
+### Objectives, atmosphere, and encounter commands
+
+| Command | Default input | Explicit inputs | Arguments | Output |
+| --- | --- | --- | --- | --- |
+| `clear_objectives` | `GameRules` | — | — | `Result<GameRules,ObjectiveError>` |
+| `add_objective` | `GameRules` | — | `id: String`, `title: String`, `priority: ObjectivePriority` | `Result<GameRules,ObjectiveError>` |
+| `activate_objective` | `GameRules` | — | `id: String` | `Result<GameRules,ObjectiveError>` |
+| `spawn_ambient_emitter` | `MapMarker` | — | `seed: UInt64` | `Result<AmbientEmitter,SpawnError>` |
+| `start_ambient_emitter` | `AmbientEmitter` | — | `fade_seconds: Float32` | `Result<AmbientEmitter,AudioError>` |
+| `choose_weather` | `GameMap` | — | `seed: UInt64` | `Result<WeatherProfile,WorldError>` |
+| `apply_weather` | `GameWorld` | `profile <- WeatherProfile` | — | `Result<GameWorld,WorldError>` |
+| `play_music` | — | — | `track: String`, `fade_seconds: Float32`, `loop: Bool` | `Result<Void,AudioError>` |
+| `set_player` | `EncounterDirector` | `player <- Player` | — | `Result<EncounterDirector,EncounterError>` |
+| `set_difficulty` | `EncounterDirector` | — | `difficulty: Difficulty` | `Result<EncounterDirector,EncounterError>` |
+| `arm_encounter` | `EncounterDirector` | `monsters <- Array<Monster>` | — | `Result<EncounterDirector,EncounterError>` |
+| `log_map_started` | — | `player <- Player` | `map_name: String`, `monster_count: Int32`, `loot_count: Int32` | `Result<Void,TelemetryError>` |
+
+`spawn_ambient_emitter` declares `GAME1001` for its default marker.
+
+### Marker preconditions
+
+| Command | Required classname |
+| --- | --- |
+| `validate_player_spawns` | Every marker is `info_spawn` |
+| `validate_monster_spawns` | Every marker is `info_monster_spawn` |
+| `choose_random_spawn` | Every marker is `info_spawn` |
+| `spawn_monster` | `info_monster_spawn` |
+| `assign_patrol_routes` | Every route is `info_patrol` |
+| `spawn_loot` | `info_loot_spawn` |
+| `register_checkpoint` | `info_checkpoint` |
+| `set_initial_checkpoint` | `info_checkpoint` |
+| `spawn_player` | `info_spawn` |
+| `spawn_ambient_emitter` | `info_ambient` |
+
+A violation returns `CommandOutcome.Fault(GAME1001, safe_message)`. An unexpected invoker exception remains a host fault.
+
+### Seed derivation
+
+`choose_random_spawn` and `choose_weather` consume their channel seeds once.
+
+Each lifted per-entity command computes its local seed as `hash(channel_seed, stable_id)`. It never initializes every entity with the unchanged channel seed.
+
+`spawn_monster`, `spawn_loot`, and `spawn_ambient_emitter` use `MapMarker.stable_id`. Monster AI and patrol commands use `Monster.stable_id`.

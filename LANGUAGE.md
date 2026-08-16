@@ -310,7 +310,9 @@ ShellLang 0.1 defines these core types:
 
 `Void` is not a value type. It is not assignable to `Any`, cannot enter an array, and cannot feed another operation.
 
-A fallible zero-output command has the type `Result<Void,E>`. `require` can consume this result, but its successful output remains terminal.
+A fallible zero-output command has the type `Result<Void,E>`. Its `Ok` case has no payload.
+
+`require` can consume `Result<Void,E>`. A successful `require` produces terminal `Void` without creating a `ShellValue`.
 
 ### 6.3 Any
 
@@ -544,7 +546,9 @@ A record without a default output cannot use implicit projection.
 
 ### 9.1 Declared errors
 
-A fallible operation returns `Result<T,E>`. An `Ok` contains `T`. An `Err` contains a value of `E` and runtime context frames.
+A fallible operation returns `Result<T,E>`. An `Ok` contains `T` when `T` is a value type.
+
+An `Ok` for `Result<Void,E>` contains no payload. An `Err` contains a value of `E` and runtime context frames.
 
 An `Err` is an ordinary typed value. It does not abort a script by itself.
 
@@ -585,6 +589,8 @@ ShellLang defines these generic intrinsics:
 
 These intrinsics accept the complete Result. Direct connection therefore wins before Result propagation.
 
+`value_or` requires a value success type. It is not available for `Result<Void,E>` because `Void` cannot be an argument value.
+
 ```text
 players -> first -> require -> kill
 ```
@@ -592,6 +598,12 @@ players -> first -> require -> kill
 ### 9.4 Runtime faults and host faults
 
 A runtime fault is a defined language failure that is not a typed error. Examples include `require` on `Err`, integer overflow, and division by zero.
+
+A registered command MAY return a runtime fault that its descriptor declares. This outcome is not an `Err` and cannot propagate as a value.
+
+A command runtime fault MUST contain a stable host-defined runtime fault code and a safe message. Core runtime fault codes use the `SL4xxx` range.
+
+Host runtime fault codes MUST use a different namespace, such as `GAME1001`.
 
 A host fault reports a broken host boundary or stale execution state. Examples include:
 
@@ -602,6 +614,8 @@ A host fault reports a broken host boundary or stale execution state. Examples i
 - An invalid initial session requirement
 
 A runtime fault or host fault aborts the current compilation. The runtime MUST NOT execute later statements.
+
+A runtime fault during array lifting also stops the lift. The runtime MUST NOT invoke the operation for later elements.
 
 Completed assignments and command side effects remain committed. ShellLang 0.1 does not provide rollback.
 
@@ -618,6 +632,7 @@ A command descriptor defines:
 - Zero or more arguments
 - Zero or more output ports
 - Zero or one declared error type
+- Zero or more declared runtime fault codes
 - One synchronous invoker
 
 Input ports carry data. Arguments configure an invocation.
@@ -686,7 +701,7 @@ Named arguments are the preferred style for scripts and documentation.
 
 ### 10.5 Outputs
 
-A command with no output returns `Void`. A fallible command with no output returns `Result<Void,E>`.
+A command with no output returns `Void`. A fallible command with no output returns `Result<Void,E>` with payloadless success.
 
 A command with one output returns that output type directly. Its output name remains available in metadata.
 
@@ -696,25 +711,65 @@ The runtime validates every output value against its descriptor before it return
 
 ## 11. Array lifting
 
-### 11.1 Scalar lifting
+### 11.1 Value-producing scalar lifting
 
 When a complete array cannot connect to a primary scalar input, the runtime invokes the operation for each element.
 
 The runtime processes elements sequentially in index order. It preserves that order in the output array.
 
 ```text
-Array<T> -> operation(T -> R)
+Array<T> -> operation(T -> R), where R is not Void
     => Array<R>
 ```
 
 ShellLang 0.1 does not run lifted invocations concurrently.
 
-### 11.2 Fallible lifting
+### 11.2 Terminal scalar lifting
 
-A fallible lifted operation returns one Result around the output array:
+A lifted zero-output operation is terminal. The runtime never creates `Array<Void>`.
 
 ```text
-Array<T> -> operation(T -> Result<R,E>)
+Array<T> -> operation(T -> Void)
+    => Void
+
+Array<T> -> operation(T -> Result<Void,E>)
+    => Result<Void,E>
+```
+
+The runtime invokes the operation sequentially in input order. An empty array performs zero invocations.
+
+A non-fallible lift returns `Void` after all invocations complete. A fallible lift returns payloadless `Ok<Void>` after all invocations succeed.
+
+The runtime stops a fallible lift at the first `Err`. It adds the complete array-index path to that error.
+
+Terminal lifting collapses at every recursive array layer:
+
+```text
+Array<Array<T>> -> operation(T -> Void)
+    => Void
+
+Array<Array<T>> -> operation(T -> Result<Void,E>)
+    => Result<Void,E>
+```
+
+Result propagation also preserves the terminal output:
+
+```text
+Result<Array<T>, E1> -> operation(T -> Void)
+    => Result<Void,E1>
+
+Result<Array<T>, E1> -> operation(T -> Result<Void,E2>)
+    => Result<Void,common_error(E1,E2)>
+```
+
+Section 10.3 still controls secondary evaluation. The runtime evaluates secondary inputs once, including when the source array is empty.
+
+### 11.3 Fallible value lifting
+
+A fallible value-producing operation returns one Result around the output array:
+
+```text
+Array<T> -> operation(T -> Result<R,E>), where R is not Void
     => Result<Array<R>,E>
 ```
 
@@ -728,6 +783,14 @@ Result and array adaptations compose recursively:
 Result<Array<T>, E1> -> operation(T -> Result<R, E2>)
     => Result<Array<R>, common_error(E1, E2)>
 ```
+
+### 11.4 Runtime faults during lifting
+
+A runtime fault stops the current lift immediately. The runtime does not invoke the operation for later elements.
+
+The runtime adds the complete array-index path and source span to the fault. It then aborts the current compilation.
+
+Completed invocations and their host effects remain committed.
 
 ## 12. Collection intrinsics
 
@@ -1022,3 +1085,45 @@ trace_result.hit -> display   # Pass the explicit hit field.
 [] -> max     # Err(EmptyCollectionError).
 [] -> average # Err(EmptyCollectionError).
 ```
+
+### A.9 Non-fallible terminal lifting
+
+Given `kill : Player -> Void`, this statement kills each player in index order and then produces `Void`:
+
+```text
+players -> kill
+```
+
+An empty `players` array performs no invocations and still produces `Void`.
+
+### A.10 Fallible terminal lifting
+
+Given `register : Player -> Result<Void,RegistrationError>`, this statement returns payloadless `Ok<Void>` after complete success:
+
+```text
+players -> register
+```
+
+The first `Err` stops the lift. The error contains the failing player's array index.
+
+An empty array returns payloadless `Ok<Void>`.
+
+### A.11 Recursive terminal lifting
+
+These types show terminal collapse through nested arrays and an outer Result:
+
+```text
+Array<Array<Player>> -> kill
+    => Void
+
+Result<Array<Player>,LoadError> -> kill
+    => Result<Void,LoadError>
+```
+
+Neither expression creates `Array<Void>`.
+
+### A.12 Command runtime fault
+
+Given a lifted command that declares `GAME1001`, a returned `GAME1001` fault stops the current lift and compilation.
+
+The runtime records the failing array index. It does not invoke the command for later elements.
