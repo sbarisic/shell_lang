@@ -26,9 +26,9 @@ value.member
 
 ## Status
 
-ShellLang 0.1 is a specification milestone. The parser, compiler, runtime, and test suite are not implemented yet.
+ShellLang 0.1 is implemented as a dependency-free .NET 10 library. It includes the handwritten parser, static binder, descriptor catalog, synchronous runtime, collection intrinsics, diagnostics, help, and completion APIs.
 
-The repository contains a buildable .NET 10 project skeleton for the later implementation.
+The `shell_lang_test` console project is both the conformance runner and a deterministic mock-game host for the complete map bootstrap example.
 
 ## Specifications
 
@@ -69,10 +69,18 @@ These limits keep the first implementation focused on typed commands, connection
 
 ## Build
 
-The current project skeleton requires the .NET 10 SDK.
+The project requires the .NET 10 SDK.
 
 ```powershell
 dotnet build .\shell_lang.slnx
+```
+
+Run the conformance cases and example together, or select one mode:
+
+```powershell
+dotnet run --project .\shell_lang_test
+dotnet run --project .\shell_lang_test -- --tests
+dotnet run --project .\shell_lang_test -- --example
 ```
 
 ## License
