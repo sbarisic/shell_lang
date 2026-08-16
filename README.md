@@ -35,6 +35,8 @@ The repository contains a buildable .NET 10 project skeleton for the later imple
 - [Language specification](LANGUAGE.md) defines syntax, types, pipelines, lifting, Results, faults, and collection intrinsics.
 - [C# hosting contract](HOSTING.md) defines descriptors, sessions, compilation, execution, diagnostics, and the host security boundary.
 
+The [map bootstrap example](EXAMPLE.md) shows a complete 280-line ShellLang script for an in-game map.
+
 The specification documents are normative. This README is only an introduction.
 
 ## Core behavior
