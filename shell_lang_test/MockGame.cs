@@ -1,4 +1,5 @@
 using ShellLang;
+using System.Globalization;
 
 namespace ShellLangTest;
 
@@ -150,13 +151,30 @@ internal sealed class MockGame
         CommandDescriptor Add(string name, IEnumerable<InputPortDescriptor>? inputs, IEnumerable<ArgumentDescriptor>? args,
             IEnumerable<OutputPortDescriptor>? outputs, string? error, CommandInvoker invoke, bool markerFault = false)
         {
-            var cmd = new CommandDescriptor(name, $"Mock {name} command.", inputs, args, outputs, invoke,
+            var inputList = (inputs ?? []).ToArray();
+            var argumentList = (args ?? []).ToArray();
+            var outputList = (outputs ?? []).ToArray();
+            CommandInvoker traced = (context, values) =>
+            {
+                try
+                {
+                    var outcome = invoke(context, values);
+                    Trace.Add(FormatInvocation(name, inputList, argumentList, outputList, error, context, values, outcome));
+                    return outcome;
+                }
+                catch (Exception exception)
+                {
+                    Trace.Add($"{FormatCall(name, inputList, argumentList, context, values)} -> HostFault({exception.GetType().Name})");
+                    throw;
+                }
+            };
+            var cmd = new CommandDescriptor(name, $"Mock {name} command.", inputList, argumentList, outputList, traced,
                 error is null ? null : _errors[error], markerFault ? [new RuntimeFaultCode("GAME1001")] : null);
             c.Add(cmd); return cmd;
         }
         CommandOutcome.Success One(string name, ShellValue value) => CommandOutcome.Success.Single(name, value);
         CommandInvoker Fluent(string input = "target", string output = "value", Action<InvocationContext, InvocationValues>? effect = null) => (ctx, values) =>
-        { effect?.Invoke(ctx, values); Trace.Add(ctx.Source.Offset + ":" + output); return One(output, values.GetInput(input)); };
+        { effect?.Invoke(ctx, values); return One(output, values.GetInput(input)); };
         CommandInvoker Effect(Action<InvocationValues>? effect = null) => (_, values) => { effect?.Invoke(values); return CommandOutcome.Success.Empty; };
         bool Marker(InvocationValues values, string input, string classname, out CommandOutcome.Fault? fault)
         {
@@ -165,8 +183,8 @@ internal sealed class MockGame
             return fault is null;
         }
 
-        Add("print", [new("value", "Value to print.", core.Any, true)], null, null, null, (_, v) => { Trace.Add("print:" + v.GetInput("value")); return CommandOutcome.Success.Empty; });
-        Add("set_loading_stage", null, [A("name", core.String, 0)], null, "WorldError", Effect(v => Trace.Add("loading:" + v.GetArgument<string>("name"))));
+        Add("print", [new("value", "Value to print.", core.Any, true)], null, null, null, (_, _) => CommandOutcome.Success.Empty);
+        Add("set_loading_stage", null, [A("name", core.String, 0)], null, "WorldError", Effect());
         Add("derive_seed", null, [A("base", core.UInt64, 0), A("channel", core.String, 1)], [OC("seed", core.UInt64)], null, (_, v) =>
         {
             var hash = v.GetArgument<ulong>("base"); foreach (var ch in v.GetArgument<string>("channel")) hash = unchecked((hash ^ ch) * 1099511628211UL);
@@ -247,11 +265,11 @@ internal sealed class MockGame
         Add("start_ambient_emitter", [I("emitter", "AmbientEmitter", true)], [A("fade_seconds", core.Float32, 0)], [O("value", "AmbientEmitter")], "AudioError", Fluent("emitter"));
         Add("choose_weather", [I("map", "GameMap", true)], [A("seed", core.UInt64, 0)], [O("profile", "WeatherProfile")], "WorldError", (_, _) => One("profile", V("WeatherProfile", new WeatherProfile("storm"))));
         Add("apply_weather", [I("world", "GameWorld", true), I("profile", "WeatherProfile")], null, [O("value", "GameWorld")], "WorldError", Fluent("world"));
-        Add("play_music", null, [A("track", core.String, 0), A("fade_seconds", core.Float32, 1), A("loop", core.Bool, 2)], null, "AudioError", Effect(v => Trace.Add("music:" + v.GetArgument<string>("track"))));
+        Add("play_music", null, [A("track", core.String, 0), A("fade_seconds", core.Float32, 1), A("loop", core.Bool, 2)], null, "AudioError", Effect());
         Add("set_player", [I("director", "EncounterDirector", true), I("player", "Player")], null, [O("value", "EncounterDirector")], "EncounterError", Fluent("director"));
         Add("set_difficulty", [I("director", "EncounterDirector", true)], [A("difficulty", TypeId("Difficulty"), 0)], [O("value", "EncounterDirector")], "EncounterError", Fluent("director"));
         Add("arm_encounter", [I("director", "EncounterDirector", true), new("monsters", "Monsters.", _engine.Catalog.ArrayOf(TypeId("Monster")))], null, [O("value", "EncounterDirector")], "EncounterError", Fluent("director"));
-        Add("log_map_started", [I("player", "Player")], [A("map_name", core.String, 0), A("monster_count", core.Int32, 1), A("loot_count", core.Int32, 2)], null, "TelemetryError", Effect(v => Trace.Add($"started:{v.GetArgument<string>("map_name")}")));
+        Add("log_map_started", [I("player", "Player")], [A("map_name", core.String, 0), A("monster_count", core.Int32, 1), A("loot_count", core.Int32, 2)], null, "TelemetryError", Effect());
         return c;
 
         CommandOutcome.Fault? ValidateMarkerArray(ShellValue value, string classname)
@@ -260,6 +278,72 @@ internal sealed class MockGame
             return wrong is null ? null : new CommandOutcome.Fault(new RuntimeFaultCode("GAME1001"), $"Expected {classname}, received {wrong.Classname}.");
         }
     }
+
+    private string FormatInvocation(string name, IReadOnlyList<InputPortDescriptor> inputs,
+        IReadOnlyList<ArgumentDescriptor> arguments, IReadOnlyList<OutputPortDescriptor> outputs,
+        string? errorType, InvocationContext context, InvocationValues values, CommandOutcome outcome)
+    {
+        var call = FormatCall(name, inputs, arguments, context, values);
+        return outcome switch
+        {
+            CommandOutcome.Fault fault => $"{call} -> Fault<{fault.Code.Value}>({Quote(fault.Message)})",
+            CommandOutcome.Error error => $"{call} -> Err<{_engine.Catalog.GetTypeName(error.Value.Type)}>({DescribeValue(error.Value)})",
+            CommandOutcome.Success => $"{call} -> {FormatSuccess(name, outputs, errorType)}",
+            _ => $"{call} -> HostFault(InvalidOutcome)"
+        };
+    }
+
+    private string FormatCall(string name, IReadOnlyList<InputPortDescriptor> inputs,
+        IReadOnlyList<ArgumentDescriptor> arguments, InvocationContext context, InvocationValues values)
+    {
+        var primary = inputs.FirstOrDefault(x => x.IsDefault);
+        var path = string.Concat(context.ArrayIndexPath.Select(index => $"[{index}]"));
+        var entries = new List<string>();
+        foreach (var input in inputs.Where(x => !x.IsDefault))
+            entries.Add($"{input.Name} <- {DescribeValue(values.GetInput(input.Name))}");
+        foreach (var argument in arguments.OrderBy(x => x.Position))
+            entries.Add($"{argument.Name}: {DescribeValue(values.GetArgument(argument.Name))}");
+        var invocation = entries.Count == 0 ? $"{name}{path}" : $"{name}{path}({string.Join(", ", entries)})";
+        return primary is null ? invocation : $"{DescribeValue(values.GetInput(primary.Name))} -> {invocation}";
+    }
+
+    private string FormatSuccess(string commandName, IReadOnlyList<OutputPortDescriptor> outputs, string? errorType)
+    {
+        var successType = outputs.Count switch
+        {
+            0 => "Void",
+            1 => _engine.Catalog.GetTypeName(outputs[0].Type),
+            _ => $"{ToPascal(commandName)}.Output"
+        };
+        return errorType is null ? successType : $"Ok<{successType}>";
+    }
+
+    private string DescribeValue(ShellValue value)
+    {
+        if (value.Value is string text) return Quote(text);
+        if (value.Value is bool boolean) return boolean ? "true" : "false";
+        if (value.Value is float single) return single.ToString("0.###", CultureInfo.InvariantCulture);
+        if (value.Value is double number) return number.ToString("0.###", CultureInfo.InvariantCulture);
+        if (value.Value is MapMarker marker) return marker.Name;
+        if (value.Value is Monster monster) return $"monster#{monster.StableId}";
+        if (value.Value is Player player) return player.Name;
+        if (value.Value is GameMap map) return map.Name;
+        if (value.Value is GameWorld world) return world.Name;
+        if (value.Value is EncounterDirector director) return director.Name;
+        if (value.Value is NavigationSystem navigation) return navigation.Name;
+        if (value.Value is Camera camera) return camera.Name;
+        if (value.Value is Loot loot) return loot.Name;
+        if (value.Value is AmbientEmitter emitter) return emitter.Name;
+        if (value.Value is WeatherProfile weather) return weather.Name;
+        if (_engine.Catalog.GetTypeName(value.Type).StartsWith("Array<", StringComparison.Ordinal))
+            return $"{_engine.Catalog.GetTypeName(value.Type)}[{_engine.GetArrayItems(value).Count}]";
+        if (value.Value is GameFailure failure) return Quote(failure.Message);
+        return Convert.ToString(value.Value, CultureInfo.InvariantCulture) ?? value.ToString();
+    }
+
+    private static string Quote(string value) => $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
+    private static string ToPascal(string value) => string.Concat(value.Split('_', StringSplitOptions.RemoveEmptyEntries)
+        .Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
 
     private void AddFluentWorld(List<CommandDescriptor> _, Func<string, IEnumerable<InputPortDescriptor>?, IEnumerable<ArgumentDescriptor>?, IEnumerable<OutputPortDescriptor>?, string?, CommandInvoker, bool, CommandDescriptor> add,
         Func<string, string, bool, InputPortDescriptor> input, Func<string, ShellTypeId, int, ArgumentDescriptor> arg,
