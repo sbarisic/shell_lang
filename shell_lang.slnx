@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="shell_lang/shell_lang.csproj" />
+  <Project Path="shell_lang_test/shell_lang_test.csproj" />
+</Solution>
