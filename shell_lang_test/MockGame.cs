@@ -243,9 +243,9 @@ internal sealed class MockGame
             return fault is null;
         }
 
-        Add("print", [new("value", "Value to print.", core.Any, true)], null, null, null, (_, values) =>
+        Add("print", [new("value", "Value to print.", core.Any, true)], null, null, null, (context, values) =>
         {
-            _output?.Invoke(values.GetInput("value").ToString());
+            _output?.Invoke(context.Engine.FormatValue(values.GetInput("value"), context.Session));
             return CommandOutcome.Success.Empty;
         });
         Add("set_loading_stage", null, [A("name", core.String, 0)], null, "WorldError", Effect());

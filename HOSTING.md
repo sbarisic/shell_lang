@@ -38,6 +38,7 @@ public sealed class ShellSession;
 public sealed class ShellCompilation;
 public sealed class ShellValue;
 public abstract record ShellResultValue;
+public sealed record ValueFormatOptions;
 public readonly record struct RuntimeFaultCode;
 public sealed record EmptyCollectionError;
 public sealed record CollectionCardinalityError;
@@ -95,6 +96,11 @@ public sealed class ShellEngine
         ShellSession session);
 
     public HelpItem? GetHelp(SymbolId symbol);
+
+    public string FormatValue(
+        ShellValue value,
+        ShellSession session,
+        ValueFormatOptions? options = null);
 }
 ```
 
@@ -109,6 +115,16 @@ The engine MUST include core types and compiler intrinsics in every catalog. A h
 An engine instance MAY compile scripts for several sessions. Descriptors are shared across those sessions.
 
 A `DescriptorSet` can contain types, globals, commands, and runtime fault descriptors. The engine validates their references as one atomic set.
+
+### 4.1 Value formatting
+
+`FormatValue` is the standard user-facing renderer for REPL results and `print`. The session supplies the context for registered member getters. `ValueFormatOptions.MaxDepth` defaults to `8` and MUST be at least `1`.
+
+The formatter renders strings as escaped ShellLang literals, uses invariant text for other primitives, resolves enums through registered enum members, and recursively renders arrays, Results, and output records. A host value with visible members uses `TypeName { member: value }`; an opaque host value uses only `TypeName`.
+
+The formatter MUST use registered members in normal inheritance-resolution order. It MUST NOT use CLR reflection, CLR `ToString()`, queries, or commands to inspect a host value. Getter exceptions and invalid getter values render as `<unavailable: TypeName>` without stopping sibling members.
+
+Cycle detection uses reference identity on the active recursion path. Cycles render as `<cycle: TypeName>`, and recursive values at the configured limit render as `<max-depth: TypeName>`. Repeated references outside the active path are not cycles.
 
 ## 5. Descriptor catalog
 
@@ -883,3 +899,6 @@ A conforming host test suite MUST cover these cases:
 30. Preserve contextual intrinsic order, short-circuiting, first-error propagation, and array-index context.
 31. Contain exceptions from equality delegates used by `contains` and `distinct` as host faults.
 32. Enforce end-relative indexing, strict slice ranges, and immutable collection outputs.
+33. Use one descriptor-aware formatter for REPL results and `print` output.
+34. Exclude CLR-only state, queries, commands, and host `ToString()` output from value formatting.
+35. Bound formatting cycles and depth, and isolate invalid member getters without suppressing sibling members.

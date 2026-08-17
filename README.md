@@ -84,7 +84,7 @@ dotnet run --project .\shell_lang_test -- --example
 dotnet run --project .\shell_lang_test -- --all
 ```
 
-The console keeps one session alive, so bindings carry over between entries. Enter a ShellLang expression and press Enter to evaluate it. The `print` command writes its value using the host value's raw string representation, while successful commands with no result remain silent. Type `help` to list the registered commands and intrinsics, `help <name>` for detailed symbol help, or `exit`/`quit` to close.
+The console keeps one session alive, so bindings carry over between entries. Enter a ShellLang expression and press Enter to evaluate it. REPL results and the `print` command use the same descriptor-aware formatter: strings are quoted, arrays and Results are recursive, registered members are visible, and opaque host values show only their ShellLang type name. Successful commands with no result remain silent. Type `help` to list the registered commands and intrinsics, `help <name>` for detailed symbol help, or `exit`/`quit` to close.
 
 ## License
 

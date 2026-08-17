@@ -1,6 +1,5 @@
 using ShellLang;
 using ShellLangTest;
-using System.Globalization;
 
 internal sealed record IntrinsicProbe(int Value);
 
@@ -72,7 +71,7 @@ internal static class InteractiveConsole
             {
                 case ExecutionStatus.Completed:
                     if (result.Value is not null && result.Value.Value is not ShellResultValue.VoidSuccess)
-                        Console.WriteLine(FormatValue(engine, result.Value));
+                        Console.WriteLine(engine.FormatValue(result.Value, session));
                     break;
                 case ExecutionStatus.RuntimeFault:
                     Console.WriteLine($"{result.RuntimeFault!.Code.Value}: {result.RuntimeFault.Message}");
@@ -181,29 +180,6 @@ internal static class InteractiveConsole
         }
     }
 
-    private static string FormatValue(ShellEngine engine, ShellValue value)
-    {
-        if (value.Value is ShellResultValue.Success success)
-            return $"Ok({FormatValue(engine, success.Value)})";
-        if (value.Value is ShellResultValue.VoidSuccess)
-            return "Ok";
-        if (value.Value is ShellResultValue.Error error)
-            return $"Err({FormatValue(engine, error.Value)})";
-
-        var typeName = engine.Catalog.GetTypeName(value.Type);
-        if (typeName.StartsWith("Array<", StringComparison.Ordinal))
-            return $"[{string.Join(", ", engine.GetArrayItems(value).Select(item => FormatValue(engine, item)))}]";
-
-        return value.Value switch
-        {
-            string text => $"\"{text.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"",
-            bool boolean => boolean ? "true" : "false",
-            float number => number.ToString("0.###", CultureInfo.InvariantCulture),
-            double number => number.ToString("0.###", CultureInfo.InvariantCulture),
-            IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
-            _ => value.ToString()
-        };
-    }
 }
 
 internal static class Conformance
@@ -220,6 +196,7 @@ internal static class Conformance
         Test("catalog and session requirements", Revisions);
         Test("help and completion", Metadata);
         Test("console print output", PrintOutput);
+        Test("descriptor-aware value formatting", ValueFormattingConformance.Run);
         Test("terminal lifting, fault containment, and evaluation counts", AdvancedConformance.Run);
         Test("full 280-line map bootstrap", ExampleAssertions);
         Console.WriteLine($"Conformance: {_passed} suites passed.");
@@ -481,14 +458,14 @@ internal static class Conformance
         Equal(ExecutionStatus.Completed, result.Status);
         True(result.Value is null, "A non-fallible print command must remain terminal Void.");
         Equal(1, output.Count);
-        Equal("Hello world", output[0]);
+        Equal("\"Hello world\"", output[0]);
 
         output.Clear();
         result = Run(engine, session, "[\"one\", \"two\"] -> print");
         Equal(ExecutionStatus.Completed, result.Status);
         True(result.Value is null, "Printing an array must remain terminal Void.");
         Equal(1, output.Count);
-        Equal("[one, two]", output[0]);
+        Equal("[\"one\", \"two\"]", output[0]);
     }
 
     private static void ExampleAssertions() => Example.Run(printTrace: false);
