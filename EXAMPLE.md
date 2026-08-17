@@ -18,7 +18,7 @@ The fenced script contains 280 physical lines.
 
 ## Script
 
-```text
+```shelllang
 # First map compilation.
 # A runtime fault or host fault aborts the remaining bootstrap.
 map_name = map.name

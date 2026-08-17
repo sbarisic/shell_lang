@@ -4,14 +4,13 @@ ShellLang is a typed command and dataflow language for in-process .NET hosts.
 
 Commands exchange typed values instead of byte streams. A host can expose game objects, tools, services, or other local values through explicit descriptors.
 
-```text
-target = players
-    -> where(.health < 50)
+```shelllang
+target = find_entities(classname: "info_spawn")
+    -> where(.spawn_order > 1)
     -> first
-
-target
     -> require
-    -> damage(amount: 10, type: Fire)
+
+target.position -> print
 ```
 
 The language uses a small set of connection forms:
@@ -28,7 +27,7 @@ value.member
 
 ShellLang 0.1 is implemented as a dependency-free .NET 10 library. It includes the handwritten parser, static binder, descriptor catalog, synchronous runtime, collection intrinsics, diagnostics, help, and completion APIs.
 
-The `shell_lang_test` console project is an interactive in-game-style console, a conformance runner, and a deterministic mock-game host for the complete map bootstrap example.
+The `shell_lang_test` project is an interactive in-game-style console and bootstrap executable. The `shell_lang_tests` project contains the discoverable conformance suite, and `shell_lang_test_support` provides their shared deterministic mock-game host.
 
 ## Specifications
 
@@ -75,13 +74,12 @@ The project requires the .NET 10 SDK.
 dotnet build .\shell_lang.slnx
 ```
 
-Start the interactive console, or run one of the verification modes:
+Start the interactive console, run the conformance suite, or execute the full bootstrap example:
 
 ```powershell
 dotnet run --project .\shell_lang_test
-dotnet run --project .\shell_lang_test -- --tests
+dotnet test .\shell_lang.slnx
 dotnet run --project .\shell_lang_test -- --example
-dotnet run --project .\shell_lang_test -- --all
 ```
 
 The console keeps one session alive, so bindings carry over between entries. Enter a ShellLang expression and press Enter to evaluate it. REPL results and the `print` command use the same descriptor-aware formatter: strings are quoted, arrays and Results are recursive, registered members are visible, and opaque host values show only their ShellLang type name. Successful commands with no result remain silent. Type `help` to list the registered commands and intrinsics, `help <name>` for detailed symbol help, or `exit`/`quit` to close.

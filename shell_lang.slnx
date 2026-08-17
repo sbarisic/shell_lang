@@ -1,4 +1,6 @@
 <Solution>
   <Project Path="shell_lang/shell_lang.csproj" />
   <Project Path="shell_lang_test/shell_lang_test.csproj" />
+  <Project Path="shell_lang_test_support/shell_lang_test_support.csproj" />
+  <Project Path="shell_lang_tests/shell_lang_tests.csproj" />
 </Solution>

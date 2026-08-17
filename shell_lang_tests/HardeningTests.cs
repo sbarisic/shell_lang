@@ -1,5 +1,6 @@
 using ShellLang;
 using ShellLangTest;
+using Xunit;
 
 internal sealed record HierarchyProbe(string Value);
 internal sealed record MutationReceiver(int Value);
@@ -9,9 +10,10 @@ internal sealed class CallbackObserver(Action callback) : IExecutionObserver
 	public void StatementCompleted(int statementIndex, SourceSpan source, ShellValue? value) => callback();
 }
 
-internal static partial class Conformance
+public sealed partial class ConformanceTests
 {
-	private static void NominalHierarchy()
+	[Fact]
+	public void NominalHierarchy()
 	{
 		var engine = new ShellEngine();
 		var core = engine.Core;
@@ -36,38 +38,38 @@ internal static partial class Conformance
 			.Member("conflict", "Explicit conflict resolution.", core.String, _ => "resolved").Build();
 		var registration = engine.Register(new DescriptorSet(types:
 			[joinB, right, root, specific, left, joinA, conflictRight, conflictLeft, resolved]));
-		True(registration.Success, string.Join(Environment.NewLine, registration.Diagnostics));
+		Assert.True(registration.Success, string.Join(Environment.NewLine, registration.Diagnostics));
 
-		True(engine.Catalog.IsAssignable(joinA.Id, root.Id));
-		True(!engine.Catalog.IsAssignable(root.Id, joinA.Id));
-		True(engine.Catalog.IsAssignable(engine.Catalog.ArrayOf(joinA.Id), engine.Catalog.ArrayOf(root.Id)));
+		Assert.True(engine.Catalog.IsAssignable(joinA.Id, root.Id));
+		Assert.True(!engine.Catalog.IsAssignable(root.Id, joinA.Id));
+		Assert.True(engine.Catalog.IsAssignable(engine.Catalog.ArrayOf(joinA.Id), engine.Catalog.ArrayOf(root.Id)));
 
 		var game = new MockGame();
 		var gameEngine = new ShellEngine();
-		True(game.Register(gameEngine).Success);
+		Assert.True(game.Register(gameEngine).Success);
 		var gameSession = new ShellSession();
 		var common = gameEngine.Compile("find_entities(classname: \"info_spawn\") -> validate_player_spawns(navigation <- navigation) -> choose_random_spawn(seed: 1)", gameSession);
 		Valid(common);
-		Equal("Result<MapMarker,MapError>", gameEngine.Catalog.GetTypeName(common.ResultType!.Value));
+		Assert.Equal("Result<MapMarker,MapError>", gameEngine.Catalog.GetTypeName(common.ResultType!.Value));
 		var gameErrors = gameEngine.Catalog.Errors.ToDictionary(x => x.Name, x => x.Id, StringComparer.Ordinal);
-		True(gameEngine.Catalog.IsAssignable(gameErrors["NavigationError"], gameErrors["MapError"]));
-		True(gameEngine.Catalog.IsAssignable(gameErrors["SpawnError"], gameErrors["MapError"]));
-		True(gameEngine.Catalog.IsAssignable(gameErrors["InventoryError"], gameErrors["PlayerError"]));
-		True(!gameEngine.Catalog.IsAssignable(gameErrors["PlayerError"], gameErrors["InventoryError"]));
+		Assert.True(gameEngine.Catalog.IsAssignable(gameErrors["NavigationError"], gameErrors["MapError"]));
+		Assert.True(gameEngine.Catalog.IsAssignable(gameErrors["SpawnError"], gameErrors["MapError"]));
+		Assert.True(gameEngine.Catalog.IsAssignable(gameErrors["InventoryError"], gameErrors["PlayerError"]));
+		Assert.True(!gameEngine.Catalog.IsAssignable(gameErrors["PlayerError"], gameErrors["InventoryError"]));
 
 		var session = new ShellSession();
 		session.SetBinding("probe", engine.CreateValue(joinA.Id, new HierarchyProbe("root-value")));
-		Equal("specific", Run(engine, session, "probe.choice").Value!.Get<string>());
+		Assert.Equal("specific", Run(engine, session, "probe.choice").Value!.Get<string>());
 		var helpA = engine.GetHelp(joinA.SymbolId)!;
 		var helpB = engine.GetHelp(joinB.SymbolId)!;
-		Equal(string.Join("|", helpA.Members), string.Join("|", helpB.Members));
-		Equal(1, helpA.Members.Count(x => x == "shared"));
+		Assert.Equal(string.Join("|", helpA.Members), string.Join("|", helpB.Members));
+		Assert.Equal(1, helpA.Members.Count(x => x == "shared"));
 		var completions = engine.GetCompletions("probe.", 6, session).Items;
-		Equal(1, completions.Count(x => x.InsertionText == "shared"));
+		Assert.Equal(1, completions.Count(x => x.InsertionText == "shared"));
 		var formatted = engine.FormatValue(engine.CreateValue(joinA.Id, new HierarchyProbe("root-value")), session);
-		Equal(1, formatted.Split("shared:", StringSplitOptions.None).Length - 1);
+		Assert.Equal(1, formatted.Split("shared:", StringSplitOptions.None).Length - 1);
 		session.SetBinding("resolved", engine.CreateValue(resolved.Id, new HierarchyProbe("value")));
-		Equal("resolved", Run(engine, session, "resolved.conflict").Value!.Get<string>());
+		Assert.Equal("resolved", Run(engine, session, "resolved.conflict").Value!.Get<string>());
 
 		var ambiguousEngine = new ShellEngine();
 		var ambiguousCore = ambiguousEngine.Core;
@@ -81,13 +83,14 @@ internal static partial class Conformance
 		var revision = ambiguousEngine.CatalogRevision;
 		var typeCount = ambiguousEngine.Catalog.Types.Count;
 		var rejected = ambiguousEngine.Register(new DescriptorSet(types: [ambiguousJoin, ambiguousRight, ambiguousRoot, ambiguousLeft]));
-		True(!rejected.Success);
-		True(rejected.Diagnostics.Any(x => x.Code == "SL3021"));
-		Equal(revision, ambiguousEngine.CatalogRevision);
-		Equal(typeCount, ambiguousEngine.Catalog.Types.Count);
+		Assert.True(!rejected.Success);
+		Assert.Contains(rejected.Diagnostics, x => x.Code == "SL3021");
+		Assert.Equal(revision, ambiguousEngine.CatalogRevision);
+		Assert.Equal(typeCount, ambiguousEngine.Catalog.Types.Count);
 	}
 
-	private static void SessionBindingIsolation()
+	[Fact]
+	public void SessionBindingIsolation()
 	{
 		var engine = new ShellEngine();
 		var core = engine.Core;
@@ -130,7 +133,7 @@ internal static partial class Conformance
 		});
 		var registration = engine.Register(new DescriptorSet(types: [receiver], globals: [global],
 			commands: [command, stateCommand, reenter]));
-		True(registration.Success, string.Join(Environment.NewLine, registration.Diagnostics));
+		Assert.True(registration.Success, string.Join(Environment.NewLine, registration.Diagnostics));
 
 		session.SetBinding("protected_value", engine.CreateValue(core.Int32, 1));
 		session.SetBinding("mutation_receiver", engine.CreateValue(receiver.Id, new MutationReceiver(7)));
@@ -159,30 +162,30 @@ internal static partial class Conformance
 				mutation = attempt.Mutate;
 				var revision = session.SchemaRevision;
 				var result = boundary.Execute();
-				Equal(ExecutionStatus.HostFault, result.Status);
-				True(result.HostFault!.Exception is InvalidOperationException,
+				Assert.Equal(ExecutionStatus.HostFault, result.Status);
+				Assert.True(result.HostFault!.Exception is InvalidOperationException,
 					$"{boundary.Name}/{attempt.Name} did not preserve the rejected mutation exception.");
-				True(session.TryGetBinding("protected_value", out var retained));
-				Equal(core.Int32, retained.Type);
-				Equal(1, retained.Get<int>());
-				Equal(revision, session.SchemaRevision);
+				Assert.True(session.TryGetBinding("protected_value", out var retained));
+				Assert.Equal(core.Int32, retained.Type);
+				Assert.Equal(1, retained.Get<int>());
+				Assert.Equal(revision, session.SchemaRevision);
 				var read = engine.Execute(readCompilation, session);
-				Equal(ExecutionStatus.Completed, read.Status);
-				Equal(2, read.Value!.Get<int>());
+				Assert.Equal(ExecutionStatus.Completed, read.Status);
+				Assert.Equal(2, read.Value!.Get<int>());
 			}
 
 		mutation = static () => { };
-		Equal(ExecutionStatus.Completed, Execute("created = 1").Status);
+		Assert.Equal(ExecutionStatus.Completed, Execute("created = 1").Status);
 		var addedRevision = session.SchemaRevision;
-		Equal(ExecutionStatus.Completed, Execute("created = 2").Status);
-		Equal(addedRevision, session.SchemaRevision);
-		Equal(ExecutionStatus.Completed, Execute("created = \"changed\"").Status);
-		Equal(addedRevision + 1, session.SchemaRevision);
-		Equal(ExecutionStatus.Completed, Execute("mutate_host_state()").Status);
-		Equal(1, hostState);
-		Equal(ExecutionStatus.Completed, Execute("reenter_session()").Status);
-		Equal(ExecutionStatus.HostFault, nestedResult!.Status);
-		Equal("SL5005", nestedResult.HostFault!.Code);
+		Assert.Equal(ExecutionStatus.Completed, Execute("created = 2").Status);
+		Assert.Equal(addedRevision, session.SchemaRevision);
+		Assert.Equal(ExecutionStatus.Completed, Execute("created = \"changed\"").Status);
+		Assert.Equal(addedRevision + 1, session.SchemaRevision);
+		Assert.Equal(ExecutionStatus.Completed, Execute("mutate_host_state()").Status);
+		Assert.Equal(1, hostState);
+		Assert.Equal(ExecutionStatus.Completed, Execute("reenter_session()").Status);
+		Assert.Equal(ExecutionStatus.HostFault, nestedResult!.Status);
+		Assert.Equal("SL5005", nestedResult.HostFault!.Code);
 
 		ExecutionResult Execute(string source, ExecutionOptions? options = null)
 		{
@@ -192,7 +195,8 @@ internal static partial class Conformance
 		}
 	}
 
-	private static void CommandBuilderDeclarations()
+	[Fact]
+	public void CommandBuilderDeclarations()
 	{
 		var engine = new ShellEngine();
 		var core = engine.Core;
@@ -205,11 +209,11 @@ internal static partial class Conformance
 				values.GetInput<int>("value") + values.GetArgument<int>("amount"))))
 			.Build();
 		var registration = engine.Register(new DescriptorSet(commands: [command]));
-		True(registration.Success, string.Join(Environment.NewLine, registration.Diagnostics));
-		Equal(core.Int32, command.Inputs.Single().Type);
-		Equal(core.Int32, command.Arguments.Single().Type);
-		Equal(core.Int32, command.Outputs.Single().Type);
+		Assert.True(registration.Success, string.Join(Environment.NewLine, registration.Diagnostics));
+		Assert.Equal(core.Int32, command.Inputs.Single().Type);
+		Assert.Equal(core.Int32, command.Arguments.Single().Type);
+		Assert.Equal(core.Int32, command.Outputs.Single().Type);
 		var result = Run(engine, new ShellSession(), "2 -> builder_add(3)");
-		Equal(5, result.Value!.Get<int>());
+		Assert.Equal(5, result.Value!.Get<int>());
 	}
 }

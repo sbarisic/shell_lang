@@ -135,7 +135,7 @@ An exponent uses `e` or `E`, an optional sign, and one or more decimal digits. A
 
 Strings support `\\`, `\"`, `\n`, `\r`, `\t`, and `\uXXXX` escapes. Other escape sequences are syntax errors.
 
-```text
+```shelllang
 message = "player\nready"
 numbers = [1, 2, 3]
 ```
@@ -190,7 +190,15 @@ primary_expression  = literal
                     | identifier
                     | invocation
                     | array_literal
+                    | contextual_member
                     | "(", expression, ")" ;
+
+literal             = boolean_literal
+                    | integer_literal
+                    | fractional_literal
+                    | string_literal ;
+
+contextual_member   = ".", identifier, [ member_arguments ] ;
 
 invocation          = identifier, "(", [ invocation_entries ], ")" ;
 invocation_entries  = invocation_entry, { ",", invocation_entry }, [ "," ] ;
@@ -215,7 +223,7 @@ A pipeline stage can omit `()` only when the command or intrinsic has no supplie
 
 A command used without a pipeline source MUST use invocation syntax. A zero-input command therefore uses `command()`.
 
-The parser permits a leading `.` primary only in a contextual intrinsic expression. Section 12 defines this form.
+The lexer supplies the `boolean_literal`, `integer_literal`, `fractional_literal`, and `string_literal` terminals described in Section 3. The parser permits `contextual_member` only in a contextual intrinsic expression. Section 12 defines this semantic restriction.
 
 ## 5. Names and assignments
 
@@ -826,9 +834,9 @@ where<T>(Array<T>, predicate: T -> Bool) -> Array<T>
 
 The predicate can be positional or named:
 
-```text
-players -> where(.health < 50)
-players -> where(predicate: .health < 50)
+```shelllang
+find_entities(classname: "info_spawn") -> where(.spawn_order > 1)
+find_entities(classname: "info_spawn") -> where(predicate: .spawn_order > 1)
 ```
 
 `where` evaluates the predicate in input order. It preserves the order of accepted elements.
@@ -1158,13 +1166,13 @@ trace_result.hit -> display   # Pass the explicit hit field.
 
 ### A.8 Empty reducers
 
-```text
-[] -> count   # 0 when the empty array has a known element type.
-[] -> sum     # Numeric zero when the empty array has a known numeric type.
-[] -> first   # Err(EmptyCollectionError).
-[] -> min     # Err(EmptyCollectionError).
-[] -> max     # Err(EmptyCollectionError).
-[] -> average # Err(EmptyCollectionError).
+```shelllang
+[1] -> skip(1) -> count   # 0.
+[1] -> skip(1) -> sum     # Numeric zero.
+[1] -> skip(1) -> first   # Err(EmptyCollectionError).
+[1] -> skip(1) -> min     # Err(EmptyCollectionError).
+[1] -> skip(1) -> max     # Err(EmptyCollectionError).
+[1] -> skip(1) -> average # Err(EmptyCollectionError).
 ```
 
 ### A.9 Non-fallible terminal lifting
