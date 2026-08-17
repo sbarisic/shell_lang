@@ -39,6 +39,8 @@ public sealed class ShellCompilation;
 public sealed class ShellValue;
 public abstract record ShellResultValue;
 public readonly record struct RuntimeFaultCode;
+public sealed record EmptyCollectionError;
+public sealed record CollectionCardinalityError;
 
 public sealed class DescriptorSet;
 public sealed class TypeDescriptor;
@@ -101,6 +103,8 @@ public sealed class ShellEngine
 A successful registration increments `CatalogRevision` once. A failed registration does not change the catalog or its revision.
 
 The engine MUST include core types and compiler intrinsics in every catalog. A host cannot replace them.
+
+`CoreTypeCatalog` exposes `EmptyCollectionError` and `CollectionCardinalityError` type identifiers. A `CollectionCardinalityError` value contains the actual array count that caused `single` to fail.
 
 An engine instance MAY compile scripts for several sessions. Descriptors are shared across those sessions.
 
@@ -875,3 +879,7 @@ A conforming host test suite MUST cover these cases:
 26. Add the failing primary array-index path to a command runtime fault.
 27. Convert an undeclared command fault code to a host fault.
 28. Keep invoker exceptions classified as host faults.
+29. Preserve collection-intrinsic argument evaluation order and Result propagation.
+30. Preserve contextual intrinsic order, short-circuiting, first-error propagation, and array-index context.
+31. Contain exceptions from equality delegates used by `contains` and `distinct` as host faults.
+32. Enforce end-relative indexing, strict slice ranges, and immutable collection outputs.

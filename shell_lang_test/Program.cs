@@ -2,6 +2,8 @@ using ShellLang;
 using ShellLangTest;
 using System.Globalization;
 
+internal sealed record IntrinsicProbe(int Value);
+
 public static class Program
 {
     public static int Main(string[] args)
@@ -212,6 +214,7 @@ internal static class Conformance
         Test("literals, assignments, and operators", LiteralsAndOperators);
         Test("multiline continuation and hard semicolon", Continuation);
         Test("arrays and reducers", ArraysAndReducers);
+        Test("expanded collection intrinsics", ExpandedCollectionIntrinsics);
         Test("empty reducer and require fault", EmptyRequire);
         Test("registration is atomic", AtomicRegistration);
         Test("catalog and session requirements", Revisions);
@@ -255,6 +258,169 @@ internal static class Conformance
         Equal(1, result.Value!.Get<int>());
         result = Run(engine, session, "find_entities(classname: \"info_spawn\") -> where(.spawn_order > 1) -> count");
         Equal(2, result.Value!.Get<int>());
+    }
+
+    private static void ExpandedCollectionIntrinsics()
+    {
+        var (engine, _, session) = Fixture();
+        var core = engine.Core;
+
+        var result = Run(engine, session, "[10, 20, 30] -> at(-1)");
+        Equal(30, result.Value!.Get<int>());
+        result = Run(engine, session, "[10, 20, 30] -> at(-3)");
+        Equal(10, result.Value!.Get<int>());
+        result = Run(engine, session, "[10, 20, 30] -> at(2)");
+        Equal(30, result.Value!.Get<int>());
+        result = Run(engine, session, "[10, 20] -> at([1] -> first) -> require");
+        Equal(20, result.Value!.Get<int>());
+        result = engine.Execute(engine.Compile("[10, 20, 30] -> at(3)", session), session);
+        Equal(ExecutionStatus.RuntimeFault, result.Status);
+        Equal("SL4006", result.RuntimeFault!.Code.Value);
+        result = engine.Execute(engine.Compile("[1] -> skip(1) -> at(0)", session), session);
+        Equal(ExecutionStatus.RuntimeFault, result.Status);
+        Equal("SL4006", result.RuntimeFault!.Code.Value);
+
+        result = Run(engine, session, "[1, 2, 3] -> skip(count: 1) -> sum");
+        Equal(5, result.Value!.Get<int>());
+        result = Run(engine, session, "[1, 2, 3] -> skip(99) -> count");
+        Equal(0, result.Value!.Get<int>());
+        result = Run(engine, session, "[1, 2, 3] -> slice(start: -2, count: 2) -> sum");
+        Equal(5, result.Value!.Get<int>());
+        result = Run(engine, session, "[1, 2, 3] -> slice(3, 0) -> count");
+        Equal(0, result.Value!.Get<int>());
+        result = engine.Execute(engine.Compile("[1, 2, 3] -> slice(2, 2)", session), session);
+        Equal(ExecutionStatus.RuntimeFault, result.Status);
+        Equal("SL4007", result.RuntimeFault!.Code.Value);
+        result = engine.Execute(engine.Compile("[1, 2, 3] -> slice(-4, 1)", session), session);
+        Equal(ExecutionStatus.RuntimeFault, result.Status);
+        Equal("SL4007", result.RuntimeFault!.Code.Value);
+        result = engine.Execute(engine.Compile("[1, 2, 3] -> slice(4, 0)", session), session);
+        Equal(ExecutionStatus.RuntimeFault, result.Status);
+        Equal("SL4007", result.RuntimeFault!.Code.Value);
+        result = engine.Execute(engine.Compile("n = -1\n[1, 2, 3] -> slice(0, n)", session), session);
+        Equal(ExecutionStatus.RuntimeFault, result.Status);
+        Equal("SL4004", result.RuntimeFault!.Code.Value);
+        True(!engine.Compile("[1] -> skip(-1)", session).IsValid);
+        Run(engine, session, "original = [1, 2, 3]");
+        Run(engine, session, "original -> slice(1, 1)");
+        result = Run(engine, session, "original -> count");
+        Equal(3, result.Value!.Get<int>());
+
+        result = Run(engine, session, "find_entities(classname: \"info_spawn\") -> any(.spawn_order == 2)");
+        Equal(true, result.Value!.Get<bool>());
+        result = Run(engine, session, "find_entities(classname: \"info_spawn\") -> all(predicate: .spawn_order > 0)");
+        Equal(true, result.Value!.Get<bool>());
+        result = Run(engine, session, "find_entities(classname: \"missing\") -> any(.spawn_order > 0)");
+        Equal(false, result.Value!.Get<bool>());
+        result = Run(engine, session, "find_entities(classname: \"missing\") -> all(.spawn_order > 0)");
+        Equal(true, result.Value!.Get<bool>());
+        result = Run(engine, session, "find_entities(classname: \"info_spawn\") -> select(selector: .spawn_order * 2) -> sum");
+        Equal(12, result.Value!.Get<int>());
+        result = Run(engine, session, "find_entities(classname: \"missing\") -> select(.spawn_order) -> count");
+        Equal(0, result.Value!.Get<int>());
+
+        result = Run(engine, session, "[1, 2, 3] -> contains(value: 2)");
+        Equal(true, result.Value!.Get<bool>());
+        result = Run(engine, session, "[1, 2, 3] -> contains(9)");
+        Equal(false, result.Value!.Get<bool>());
+        result = Run(engine, session, "[1, 2, 1, 3, 2] -> distinct -> count");
+        Equal(3, result.Value!.Get<int>());
+        result = Run(engine, session, "find_entities(classname: \"info_spawn\") -> concat(find_entities(classname: \"info_spawn\")) -> distinct(by: .stable_id) -> count");
+        Equal(3, result.Value!.Get<int>());
+        result = Run(engine, session, "[1, 2] -> concat(other: [3, 4]) -> reverse -> at(0)");
+        Equal(4, result.Value!.Get<int>());
+        result = Run(engine, session, "[1, 2, 3] -> last -> require");
+        Equal(3, result.Value!.Get<int>());
+        result = Run(engine, session, "[1] -> skip(1) -> last -> is_ok");
+        Equal(false, result.Value!.Get<bool>());
+        result = Run(engine, session, "[42] -> single -> require");
+        Equal(42, result.Value!.Get<int>());
+        result = Run(engine, session, "[1, 2] -> single -> error");
+        var cardinality = result.Value!.Get<CollectionCardinalityError>();
+        Equal(2, cardinality.ActualCount);
+        result = Run(engine, session, "[1] -> skip(1) -> single -> error");
+        Equal(0, result.Value!.Get<CollectionCardinalityError>().ActualCount);
+
+        var calls = 0;
+        var probe = TypeDescriptorBuilder.For<IntrinsicProbe>("IntrinsicProbe")
+            .Description("Collection intrinsic test probe.")
+            .Member("value", "Probe value.", core.Int32, x => x.Value)
+            .FallibleQuery("test", "Test the probe.", null, core.Bool, core.Error, (context, value, _) =>
+            {
+                calls++;
+                return value.Value == 2
+                    ? new QueryOutcome.Error(context.Engine.CreateValue(core.Error, new ShellError("probe error")))
+                    : new QueryOutcome.Success(context.Engine.CreateValue(core.Bool, value.Value > 0));
+            })
+            .Equality((left, right) => left.Value == 99 || right.Value == 99
+                ? throw new InvalidOperationException("comparison failed")
+                : left.Value == right.Value)
+            .Build();
+        var baseActor = TypeDescriptorBuilder.For<BaseActor>("IntrinsicBaseActor").Build();
+        var derivedActor = TypeDescriptorBuilder.For<DerivedActor>("IntrinsicDerivedActor").Base(baseActor.Id).Build();
+        True(engine.Register(new DescriptorSet(types: [probe, baseActor, derivedActor])).Success);
+
+        ShellValue Probe(int value) => engine.CreateValue(probe.Id, new IntrinsicProbe(value));
+        session.SetBinding("probes", engine.CreateArray(probe.Id, [Probe(1), Probe(2), Probe(0)]));
+        calls = 0;
+        result = Run(engine, session, "probes -> any(.test()) -> require");
+        Equal(true, result.Value!.Get<bool>());
+        Equal(1, calls);
+        session.SetBinding("probes", engine.CreateArray(probe.Id, [Probe(0), Probe(2), Probe(1)]));
+        calls = 0;
+        result = Run(engine, session, "probes -> all(.test()) -> require");
+        Equal(false, result.Value!.Get<bool>());
+        Equal(1, calls);
+        result = Run(engine, session, "probes -> any(.test())");
+        var propagated = (ShellResultValue.Error)result.Value!.Value;
+        Equal(1, propagated.Frames.Single(x => x.ArrayIndex is not null).ArrayIndex!.Value);
+        calls = 0;
+        result = Run(engine, session, "probes -> select(.test())");
+        propagated = (ShellResultValue.Error)result.Value!.Value;
+        Equal(1, propagated.Frames.Single(x => x.ArrayIndex is not null).ArrayIndex!.Value);
+        Equal(2, calls);
+        calls = 0;
+        result = Run(engine, session, "probes -> distinct(by: .test())");
+        propagated = (ShellResultValue.Error)result.Value!.Value;
+        Equal(1, propagated.Frames.Single(x => x.ArrayIndex is not null).ArrayIndex!.Value);
+        Equal(2, calls);
+        session.SetBinding("probes", engine.CreateArray(probe.Id, [Probe(0), Probe(1), Probe(1)]));
+        result = Run(engine, session, "probes -> select(.test()) -> count -> require");
+        Equal(3, result.Value!.Get<int>());
+        result = Run(engine, session, "probes -> distinct(by: .test()) -> count -> require");
+        Equal(2, result.Value!.Get<int>());
+
+        session.SetBinding("needle", Probe(99));
+        session.SetBinding("probes", engine.CreateArray(probe.Id, [Probe(1), Probe(99)]));
+        var comparison = engine.Execute(engine.Compile("probes -> contains(needle)", session), session);
+        Equal(ExecutionStatus.HostFault, comparison.Status);
+        Equal("SL5102", comparison.HostFault!.Code);
+        comparison = engine.Execute(engine.Compile("probes -> distinct", session), session);
+        Equal(ExecutionStatus.HostFault, comparison.Status);
+        Equal("SL5102", comparison.HostFault!.Code);
+
+        var derivedValue = engine.CreateValue(derivedActor.Id, new DerivedActor("derived"));
+        session.SetBinding("wide", engine.CreateArray(baseActor.Id, [derivedValue]));
+        session.SetBinding("narrow", engine.CreateArray(derivedActor.Id, [derivedValue]));
+        result = Run(engine, session, "wide -> concat(narrow) -> count");
+        Equal(2, result.Value!.Get<int>());
+        True(!engine.Compile("narrow -> concat(wide)", session).IsValid);
+
+        True(!engine.Compile("[1] -> at(foo: 0)", session).IsValid);
+        True(!engine.Compile("[1] -> at()", session).IsValid);
+        True(!engine.Compile("[1] -> at(\"zero\")", session).IsValid);
+        True(!engine.Compile("[1] -> slice(start: 0, start: 0)", session).IsValid);
+        True(!engine.Compile("[1] -> slice(start: 0, 1)", session).IsValid);
+        True(!engine.Compile("find_entities(classname: \"info_spawn\") -> distinct", session).IsValid);
+        var duplicate = new CommandDescriptor("at", "Reserved intrinsic name.", null, null, null, (_, _) => CommandOutcome.Success.Empty);
+        True(!engine.Register(new DescriptorSet(commands: [duplicate])).Success);
+        foreach (var name in new[] { "at", "last", "skip", "slice", "any", "all", "select", "contains", "concat", "distinct", "reverse", "single" })
+        {
+            var intrinsic = engine.Catalog.Intrinsics.Single(x => x.Name == name);
+            True(!intrinsic.Description.StartsWith("Core ", StringComparison.Ordinal));
+        }
+        const string completionSource = "[1] -> ";
+        True(engine.GetCompletions(completionSource, completionSource.Length, session).Items.Any(x => x.InsertionText == "slice"));
     }
 
     private static void EmptyRequire()

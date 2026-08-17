@@ -34,7 +34,8 @@ internal sealed record BoundPrimitiveOperation(TokenKind Operator, ShellTypeId E
     ShellTypeId DirectOutput, SourceSpan Span) : BoundOperation(ExpectedInput, DirectOutput, Span);
 internal enum IntrinsicKind
 {
-    Require, ValueOr, Error, IsOk, Where, Sort, Take, Count, Sum, First, Min, Max, Average
+    Require, ValueOr, Error, IsOk, Where, Sort, Take, Count, Sum, First, Min, Max, Average,
+    At, Last, Skip, Slice, Any, All, Select, Contains, Concat, Distinct, Reverse, Single
 }
 internal sealed record BoundIntrinsicOperation(IntrinsicKind Intrinsic, ShellTypeId ExpectedInput,
     ShellTypeId DirectOutput, SourceSpan Span, BoundExpression? ContextExpression = null) : BoundOperation(ExpectedInput, DirectOutput, Span);
@@ -657,11 +658,12 @@ internal sealed class Binder
             {
                 if (success == _engine.Core.Void)
                     Error("SL2403", "value_or is unavailable for Result<Void,E>.", span);
-                var arg = entries.SingleOrDefault();
-                if (arg is null || (arg.Kind == InvocationEntryKind.NamedArgument && arg.Name != "default"))
+                if (entries.Count != 1 || entries[0].Kind == InvocationEntryKind.ExplicitInput ||
+                    entries[0].Kind == InvocationEntryKind.NamedArgument && entries[0].Name != "default")
                     Error("SL2404", "value_or requires one default argument.", span);
                 else
                 {
+                    var arg = entries[0];
                     var expression = BindExpression(arg.Expression, success);
                     secondaries.Add(new("default", false, expression, BuildAdaptation(expression.Type, success, false, arg.Span), arg.Span));
                 }
@@ -671,45 +673,120 @@ internal sealed class Binder
             var op = new BoundIntrinsicOperation(kind, primary.Type, resultOutput, span);
             return new BoundApplyExpression(primary, op, new(AdaptationKind.Direct, primary.Type, resultOutput), secondaries, CombineSecondaryResults(resultOutput, secondaries), span);
         }
-        if (entry.Kind != ShellTypeKind.Array)
+        var collectionType = FindCollectionInput(primary.Type);
+        if (collectionType is null)
             return ErrorExpression("SL2406", $"Intrinsic '{name}' requires Array<T>.", span);
-        var element = entry.ElementType!.Value;
-        if (name is "where" or "sort")
+        var collectionEntry = _engine.GetTypeEntry(collectionType.Value);
+        var element = collectionEntry.ElementType!.Value;
+
+        BoundExpression Apply(IntrinsicKind kind, ShellTypeId directOutput,
+            IReadOnlyList<BoundSecondary>? secondaries = null, BoundExpression? context = null)
         {
-            if (entries.Count != 1)
-                return ErrorExpression("SL2407", $"Intrinsic '{name}' requires one contextual expression.", span);
-            var arg = entries[0];
-            if (name == "sort" && arg.Kind == InvocationEntryKind.NamedArgument && arg.Name != "by")
-                Error("SL2408", "sort's named argument is 'by'.", arg.Span);
+            secondaries ??= [];
+            var primaryPlan = BuildAdaptation(primary.Type, collectionType.Value, false, span, directOutput);
+            var finalOutput = CombineSecondaryResults(primaryPlan.OutputType, secondaries);
+            var op = new BoundIntrinsicOperation(kind, collectionType.Value, directOutput, span, context);
+            return new BoundApplyExpression(primary, op, primaryPlan,
+                secondaries, finalOutput, span);
+        }
+
+        if (name is "where" or "sort" or "any" or "all" or "select" || (name == "distinct" && entries.Count != 0))
+        {
+            var parameter = name switch
+            {
+                "sort" or "distinct" => "by",
+                "select" => "selector",
+                _ => "predicate"
+            };
+            if (!TryMatchIntrinsicArguments(name, entries, [parameter], span, out var matched))
+                return new BoundErrorExpression(_engine.Core.Any, span);
+            var arg = matched[0].Entry;
             var old = _contextType;
-            _contextType = element;
-            var contextual = BindExpression(arg.Expression);
-            _contextType = old;
+            BoundExpression contextual;
+            try
+            {
+                _contextType = element;
+                contextual = BindExpression(arg.Expression);
+            }
+            finally { _contextType = old; }
             var contextualEntry = _engine.GetTypeEntry(contextual.Type);
             var contextualValue = contextualEntry.Kind == ShellTypeKind.Result ? contextualEntry.SuccessType!.Value : contextual.Type;
-            if (name == "where" && contextualValue != _engine.Core.Bool)
-                Error("SL2409", "where predicate must produce Bool or Result<Bool,E>.", contextual.Span);
+            if (name is "where" or "any" or "all" && contextualValue != _engine.Core.Bool)
+                Error("SL2409", $"{name} predicate must produce Bool or Result<Bool,E>.", contextual.Span);
             if (name == "sort" && !HasOrdering(contextualValue))
                 Error("SL2410", "sort key must have registered ordering.", contextual.Span);
-            var kind = name == "where" ? IntrinsicKind.Where : IntrinsicKind.Sort;
-            var contextualOutput = contextualEntry.Kind == ShellTypeKind.Result ? _engine.ResultOf(primary.Type, contextualEntry.ErrorType!.Value) : primary.Type;
-            var op = new BoundIntrinsicOperation(kind, primary.Type, contextualOutput, span, contextual);
-            return new BoundApplyExpression(primary, op, new(AdaptationKind.Direct, primary.Type, contextualOutput), [], contextualOutput, span);
+            if (name == "distinct" && !HasEquality(contextualValue))
+                Error("SL2425", "distinct key must have registered equality.", contextual.Span);
+            if (name == "select" && contextualValue == _engine.Core.Void)
+                Error("SL2424", "select selector cannot produce Void.", contextual.Span);
+
+            var directOutput = name switch
+            {
+                "any" or "all" => _engine.Core.Bool,
+                "select" => _engine.ArrayOf(contextualValue == _engine.Core.Void ? _engine.Core.Any : contextualValue),
+                _ => collectionType.Value
+            };
+            if (contextualEntry.Kind == ShellTypeKind.Result)
+                directOutput = _engine.ResultOf(directOutput, contextualEntry.ErrorType!.Value);
+            var kind = name switch
+            {
+                "where" => IntrinsicKind.Where,
+                "sort" => IntrinsicKind.Sort,
+                "any" => IntrinsicKind.Any,
+                "all" => IntrinsicKind.All,
+                "select" => IntrinsicKind.Select,
+                _ => IntrinsicKind.Distinct
+            };
+            return Apply(kind, directOutput, context: contextual);
         }
-        if (name == "take")
+
+        if (name is "take" or "skip")
         {
-            if (entries.Count != 1)
-                return ErrorExpression("SL2411", "take requires count.", span);
-            var arg = entries[0];
-            var count = BindExpression(arg.Expression, _engine.Core.Int32);
-            if (count is BoundLiteralExpression { Value.Value: int literal } && literal < 0)
-                Error("SL2412", "A literal take count cannot be negative.", count.Span);
-            var secondary = new BoundSecondary("count", false, count, BuildAdaptation(count.Type, _engine.Core.Int32, false, count.Span), count.Span);
-            var op = new BoundIntrinsicOperation(IntrinsicKind.Take, primary.Type, primary.Type, span);
-            return new BoundApplyExpression(primary, op, new(AdaptationKind.Direct, primary.Type, primary.Type), [secondary], CombineSecondaryResults(primary.Type, [secondary]), span);
+            var secondaries = BindIntrinsicValueArguments(name, entries, [("count", _engine.Core.Int32)], span);
+            if (secondaries is null)
+                return new BoundErrorExpression(_engine.Core.Any, span);
+            if (IsNegativeInt32Literal(secondaries[0].Expression))
+                Error("SL2412", $"A literal {name} count cannot be negative.", secondaries[0].Span);
+            return Apply(name == "take" ? IntrinsicKind.Take : IntrinsicKind.Skip, collectionType.Value, secondaries);
         }
+
+        if (name == "at")
+        {
+            var secondaries = BindIntrinsicValueArguments(name, entries, [("index", _engine.Core.Int32)], span);
+            return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.At, element, secondaries);
+        }
+
+        if (name == "slice")
+        {
+            var secondaries = BindIntrinsicValueArguments(name, entries,
+                [("start", _engine.Core.Int32), ("count", _engine.Core.Int32)], span);
+            if (secondaries is null)
+                return new BoundErrorExpression(_engine.Core.Any, span);
+            var count = secondaries.Single(x => x.Name == "count");
+            if (IsNegativeInt32Literal(count.Expression))
+                Error("SL2422", "A literal slice count cannot be negative.", count.Span);
+            return Apply(IntrinsicKind.Slice, collectionType.Value, secondaries);
+        }
+
+        if (name == "contains")
+        {
+            if (!HasEquality(element))
+                Error("SL2425", "contains requires elements with registered equality.", span);
+            var secondaries = BindIntrinsicValueArguments(name, entries, [("value", element)], span);
+            return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.Contains, _engine.Core.Bool, secondaries);
+        }
+
+        if (name == "concat")
+        {
+            var secondaries = BindIntrinsicValueArguments(name, entries, [("other", collectionType.Value)], span);
+            return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.Concat, collectionType.Value, secondaries);
+        }
+
         if (entries.Count != 0)
+        {
             Error("SL2405", $"Intrinsic '{name}' takes no arguments.", span);
+            return new BoundErrorExpression(_engine.Core.Any, span);
+        }
         IntrinsicKind intrinsic;
         ShellTypeId output;
         switch (name)
@@ -721,6 +798,24 @@ internal sealed class Binder
             case "first":
                 intrinsic = IntrinsicKind.First;
                 output = _engine.ResultOf(element, _engine.Core.EmptyCollectionError);
+                break;
+            case "last":
+                intrinsic = IntrinsicKind.Last;
+                output = _engine.ResultOf(element, _engine.Core.EmptyCollectionError);
+                break;
+            case "reverse":
+                intrinsic = IntrinsicKind.Reverse;
+                output = collectionType.Value;
+                break;
+            case "single":
+                intrinsic = IntrinsicKind.Single;
+                output = _engine.ResultOf(element, _engine.Core.CollectionCardinalityError);
+                break;
+            case "distinct":
+                intrinsic = IntrinsicKind.Distinct;
+                output = collectionType.Value;
+                if (!HasEquality(element))
+                    Error("SL2425", "distinct requires elements with registered equality.", span);
                 break;
             case "sum":
                 intrinsic = IntrinsicKind.Sum;
@@ -750,9 +845,109 @@ internal sealed class Binder
             default:
                 return ErrorExpression("SL2400", $"Unknown intrinsic '{name}'.", span);
         }
-        var operation = new BoundIntrinsicOperation(intrinsic, primary.Type, output, span);
-        return new BoundApplyExpression(primary, operation, new(AdaptationKind.Direct, primary.Type, output), [], output, span);
+        var operation = new BoundIntrinsicOperation(intrinsic, collectionType.Value, output, span);
+        var adaptation = BuildAdaptation(primary.Type, collectionType.Value, false, span, output);
+        return new BoundApplyExpression(primary, operation, adaptation, [], adaptation.OutputType, span);
     }
+
+    private ShellTypeId? FindCollectionInput(ShellTypeId type)
+    {
+        var entry = _engine.GetTypeEntry(type);
+        if (entry.Kind == ShellTypeKind.Array)
+            return type;
+        if (entry.Kind == ShellTypeKind.Result)
+            return FindCollectionInput(entry.SuccessType!.Value);
+        if (entry.Kind == ShellTypeKind.OutputRecord && entry.DefaultOutput is { } field)
+            return FindCollectionInput(entry.OutputFields![field]);
+        return null;
+    }
+
+    private List<BoundSecondary>? BindIntrinsicValueArguments(string intrinsic, IReadOnlyList<InvocationEntrySyntax> entries,
+        IReadOnlyList<(string Name, ShellTypeId Type)> parameters, SourceSpan span)
+    {
+        if (!TryMatchIntrinsicArguments(intrinsic, entries, parameters.Select(x => x.Name).ToArray(), span, out var matched))
+            return null;
+        var parameterTypes = parameters.ToDictionary(x => x.Name, x => x.Type, StringComparer.Ordinal);
+        var secondaries = new List<BoundSecondary>();
+        foreach (var (name, entry) in matched)
+        {
+            var expected = parameterTypes[name];
+            var expression = BindExpression(entry.Expression, expected);
+            secondaries.Add(new(name, false, expression,
+                BuildAdaptation(expression.Type, expected, false, entry.Span), entry.Span));
+        }
+        return secondaries;
+    }
+
+    private bool TryMatchIntrinsicArguments(string intrinsic, IReadOnlyList<InvocationEntrySyntax> entries,
+        IReadOnlyList<string> parameters, SourceSpan span, out List<(string Name, InvocationEntrySyntax Entry)> matched)
+    {
+        matched = [];
+        var supplied = new HashSet<string>(StringComparer.Ordinal);
+        var positional = 0;
+        var sawNamed = false;
+        var valid = true;
+        foreach (var entry in entries)
+        {
+            if (entry.Kind == InvocationEntryKind.ExplicitInput)
+            {
+                Error("SL2416", $"Intrinsic '{intrinsic}' does not accept explicit inputs.", entry.Span);
+                valid = false;
+                continue;
+            }
+
+            string? name;
+            if (entry.Kind == InvocationEntryKind.NamedArgument)
+            {
+                sawNamed = true;
+                name = parameters.FirstOrDefault(x => x == entry.Name);
+                if (name is null)
+                {
+                    Error("SL2417", $"Intrinsic '{intrinsic}' has no argument '{entry.Name}'.", entry.Span);
+                    valid = false;
+                    continue;
+                }
+            }
+            else
+            {
+                if (sawNamed)
+                {
+                    Error("SL2419", "Positional arguments must precede named entries.", entry.Span);
+                    valid = false;
+                }
+                name = positional < parameters.Count ? parameters[positional++] : null;
+                if (name is null)
+                {
+                    Error("SL2420", $"Too many arguments for intrinsic '{intrinsic}'.", entry.Span);
+                    valid = false;
+                    continue;
+                }
+            }
+
+            if (!supplied.Add(name))
+            {
+                Error("SL2418", $"Argument '{name}' is supplied more than once.", entry.Span);
+                valid = false;
+                continue;
+            }
+            matched.Add((name, entry));
+        }
+
+        foreach (var parameter in parameters)
+            if (!supplied.Contains(parameter))
+            {
+                Error("SL2421", $"Required argument '{intrinsic}.{parameter}' is missing.", span);
+                valid = false;
+            }
+        return valid;
+    }
+
+    private static bool IsNegativeInt32Literal(BoundExpression expression) =>
+        expression is BoundApplyExpression
+        {
+            Primary: BoundLiteralExpression { Value.Value: int value },
+            Operation: BoundPrimitiveOperation { Operator: TokenKind.Minus }
+        } && value > 0;
 
     private AdaptationPlan BuildAdaptation(ShellTypeId actual, ShellTypeId expected, bool allowArray, SourceSpan span, ShellTypeId? directOutput = null)
     {

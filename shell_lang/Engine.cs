@@ -219,7 +219,15 @@ public sealed partial class ShellEngine
     private bool IntrinsicApplies(string name, ShellTypeId type)
     {
         var entry = GetTypeEntry(type);
-        return name is "require" or "value_or" or "error" or "is_ok" ? entry.Kind == ShellTypeKind.Result : entry.Kind == ShellTypeKind.Array;
+        if (name is "require" or "value_or" or "error" or "is_ok")
+            return entry.Kind == ShellTypeKind.Result;
+        if (entry.Kind == ShellTypeKind.Array)
+            return true;
+        if (entry.Kind == ShellTypeKind.Result)
+            return IntrinsicApplies(name, entry.SuccessType!.Value);
+        if (entry.Kind == ShellTypeKind.OutputRecord && entry.DefaultOutput is { } field)
+            return IntrinsicApplies(name, entry.OutputFields![field]);
+        return false;
     }
 
     public HelpItem? GetHelp(SymbolId symbol)

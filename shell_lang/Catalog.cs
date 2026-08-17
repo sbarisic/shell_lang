@@ -5,6 +5,7 @@ namespace ShellLang;
 
 public sealed record ShellError(string Message);
 public sealed record EmptyCollectionError(string Message = "The collection is empty.");
+public sealed record CollectionCardinalityError(int ActualCount, string Message);
 
 public sealed class CoreTypeCatalog
 {
@@ -56,6 +57,10 @@ public sealed class CoreTypeCatalog
         get; internal init;
     }
     public ShellTypeId EmptyCollectionError
+    {
+        get; internal init;
+    }
+    public ShellTypeId CollectionCardinalityError
     {
         get; internal init;
     }
@@ -207,6 +212,7 @@ public sealed partial class ShellEngine
         var str = Add<string>("String", equality: new((a, b) => StringComparer.Ordinal.Equals(a, b)), ordering: new((a, b) => StringComparer.Ordinal.Compare((string)a, (string)b)));
         var error = Add<ShellError>("Error", ShellTypeKind.Error);
         var empty = Add<EmptyCollectionError>("EmptyCollectionError", ShellTypeKind.Error, error);
+        var cardinality = Add<CollectionCardinalityError>("CollectionCardinalityError", ShellTypeKind.Error, error);
         Core = new CoreTypeCatalog
         {
             Any = any,
@@ -220,11 +226,12 @@ public sealed partial class ShellEngine
             Float64 = float64,
             String = str,
             Error = error,
-            EmptyCollectionError = empty
+            EmptyCollectionError = empty,
+            CollectionCardinalityError = cardinality
         };
         foreach (var name in IntrinsicNames)
         {
-            var placeholder = new IntrinsicDescriptor(default, name, $"Core {name} intrinsic.");
+            var placeholder = new IntrinsicDescriptor(default, name, IntrinsicDescriptions[name]);
             var id = NextSymbol(placeholder);
             var descriptor = new IntrinsicDescriptor(id, name, placeholder.Description);
             _symbols[id] = descriptor;
@@ -688,6 +695,35 @@ public sealed partial class ShellEngine
     [GeneratedRegex("^[A-Z][A-Z0-9_]{1,15}[0-9]{4}$", RegexOptions.CultureInvariant)]
     private static partial Regex FaultRegex();
 
-    internal static readonly HashSet<string> IntrinsicNames = new(StringComparer.Ordinal)
-    { "require", "value_or", "error", "is_ok", "where", "sort", "take", "count", "sum", "first", "min", "max", "average" };
+    internal static readonly IReadOnlyDictionary<string, string> IntrinsicDescriptions =
+        new ReadOnlyDictionary<string, string>(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["require"] = "Return an Ok value or fault on Err.",
+            ["value_or"] = "Return an Ok value or a supplied default.",
+            ["error"] = "Return the error from an Err value.",
+            ["is_ok"] = "Report whether a Result is Ok.",
+            ["where"] = "Keep elements that satisfy a contextual predicate.",
+            ["sort"] = "Stable-sort elements by a contextual key.",
+            ["take"] = "Return up to the first count elements.",
+            ["count"] = "Return the number of elements.",
+            ["sum"] = "Add all numeric elements.",
+            ["first"] = "Return the first element or EmptyCollectionError.",
+            ["min"] = "Return the least element or EmptyCollectionError.",
+            ["max"] = "Return the greatest element or EmptyCollectionError.",
+            ["average"] = "Return the numeric average or EmptyCollectionError.",
+            ["at"] = "Return the element at a positive or end-relative index.",
+            ["last"] = "Return the last element or EmptyCollectionError.",
+            ["skip"] = "Return the elements after an initial count.",
+            ["slice"] = "Return a strict contiguous array range.",
+            ["any"] = "Report whether any element satisfies a contextual predicate.",
+            ["all"] = "Report whether every element satisfies a contextual predicate.",
+            ["select"] = "Transform each element with a contextual selector.",
+            ["contains"] = "Report whether an equal element is present.",
+            ["concat"] = "Append another assignable array.",
+            ["distinct"] = "Keep the first element for each equal value or key.",
+            ["reverse"] = "Return the elements in reverse order.",
+            ["single"] = "Return the only element or CollectionCardinalityError."
+        });
+
+    internal static readonly HashSet<string> IntrinsicNames = new(IntrinsicDescriptions.Keys, StringComparer.Ordinal);
 }

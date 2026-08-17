@@ -385,7 +385,7 @@ Error
     └── TelemetryError
 ```
 
-Core `EmptyCollectionError` derives directly from `Error`. The `first` intrinsic uses it.
+Core `EmptyCollectionError` and `CollectionCardinalityError` derive directly from `Error`. The `first` and `single` intrinsics use them respectively.
 
 The host also registers this runtime fault:
 

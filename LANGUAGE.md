@@ -308,6 +308,8 @@ ShellLang 0.1 defines these core types:
 | `Error` | Root type for declared errors |
 | `Void` | Absence of an output value |
 
+`EmptyCollectionError` and `CollectionCardinalityError` are core errors derived directly from `Error`. `CollectionCardinalityError` records the actual element count.
+
 `Void` is not a value type. It is not assignable to `Any`, cannot enter an array, and cannot feed another operation.
 
 A fallible zero-output command has the type `Result<Void,E>`. Its `Ok` case has no payload.
@@ -800,18 +802,19 @@ The metadata service MUST expose them for help and completion.
 
 ### 12.1 Contextual element expressions
 
-`where` and `sort` accept a contextual element expression. A leading `.` in that expression refers to the current array element.
+`where`, `sort`, `any`, `all`, `select`, and keyed `distinct` accept a contextual element expression. A leading `.` in that expression refers to the current array element.
 
 ```text
 players -> where(.health < 50)
 players -> sort(by: .health)
+players -> select(.health)
 ```
 
 The compiler binds the contextual expression once. The runtime evaluates it separately for each element.
 
 Ordinary command arguments and query arguments never bind a leading `.`.
 
-If a contextual expression returns `Result<R,E>`, the intrinsic returns `Result<Array<T>,E>`. It stops at the first `Err` and adds the current index path.
+If a contextual expression returns `Result<R,E>`, the intrinsic wraps its normal output in `Result<...,E>`. It stops at the first `Err` and adds the current index path. Contextual expressions run once per visited element in input order. Short-circuiting intrinsics do not visit later elements.
 
 ### 12.2 where
 
@@ -915,6 +918,84 @@ The full return type is `Result<R,EmptyCollectionError>`.
 An empty array returns `Err(EmptyCollectionError)`. Integer inputs convert to `Float64` before accumulation.
 
 The runtime processes values from left to right.
+
+### 12.10 at and last
+
+```text
+at<T>(Array<T>, index: Int32) -> T
+last<T>(Array<T>) -> Result<T, EmptyCollectionError>
+```
+
+`at` uses zero-based indexing. A negative index is relative to the end, so `-1` selects the last element and `-length` selects the first. An index outside the array after normalization causes runtime fault `SL4006`.
+
+`last` returns `Err(EmptyCollectionError)` for an empty array.
+
+### 12.11 skip and slice
+
+```text
+skip<T>(Array<T>, count: Int32) -> Array<T>
+slice<T>(Array<T>, start: Int32, count: Int32) -> Array<T>
+```
+
+`skip` returns the input without its first `count` elements. A count greater than the array length returns an empty array.
+
+`slice` accepts an end-relative negative `start`. After normalization, the complete range from `start` through `start + count` MUST be within the array. `start == length` is valid only when `count == 0`. An invalid range causes runtime fault `SL4007`.
+
+A negative literal count is a static error. A negative runtime count for either intrinsic causes runtime fault `SL4004`.
+
+### 12.12 any and all
+
+```text
+any<T>(Array<T>, predicate: T -> Bool) -> Bool
+all<T>(Array<T>, predicate: T -> Bool) -> Bool
+```
+
+`any` stops at the first `true`; an empty array returns `false`. `all` stops at the first `false`; an empty array returns `true`. A fallible predicate changes the output to `Result<Bool,E>`.
+
+### 12.13 select
+
+```text
+select<T,R>(Array<T>, selector: T -> R) -> Array<R>
+```
+
+`select` evaluates the selector for every element and preserves input order. A fallible selector returns `Result<Array<R>,E>`. A selector that produces `Void` is a static error.
+
+### 12.14 contains and concat
+
+```text
+contains<T>(Array<T>, value: T) -> Bool
+concat<T>(Array<T>, other: Array<T>) -> Array<T>
+```
+
+`contains` uses the declared element type's registered equality. It is a static error when that equality is unavailable.
+
+`concat` preserves the primary array's static type. The other array MUST be assignable to that type; array covariance is not used to widen the primary type. Both operations evaluate their supplied argument once.
+
+### 12.15 distinct and reverse
+
+```text
+distinct<T>(Array<T>) -> Array<T>
+distinct<T,K>(Array<T>, by: T -> K) -> Array<T>
+reverse<T>(Array<T>) -> Array<T>
+```
+
+`distinct` preserves the first element for each equal value or key and retains input order. The selected equality MUST be registered. A fallible key returns `Result<Array<T>,E>`.
+
+`reverse` returns a new immutable array with the opposite order.
+
+### 12.16 single
+
+```text
+single<T>(Array<T>) -> Result<T, CollectionCardinalityError>
+```
+
+`single` succeeds only when the array contains exactly one element. Otherwise its error records the actual count. Filtering remains explicit through `where`; `single` has no predicate form.
+
+### 12.17 Intrinsic argument rules
+
+Intrinsic arguments can be positional or named. Positional arguments MUST precede named arguments. Unknown names, duplicate arguments, missing required arguments, and explicit input syntax are static errors.
+
+Collection intrinsics accept arrays reached through Result propagation or default-output projection. A fallible contextual output and an outer Result combine their error types by the standard nearest-common-error rule.
 
 ## 13. Program execution
 
