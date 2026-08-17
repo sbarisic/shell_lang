@@ -193,6 +193,8 @@ public sealed class TypeDescriptor
 
 The non-error type graph MUST be acyclic. It can contain several declared bases or interfaces.
 
+Members and queries share one inherited symbol namespace. A local declaration resolves the same inherited name. If no local declaration exists, the most-derived inherited declaration wins, and a declaration reached repeatedly through a diamond appears once. Registration MUST reject a name contributed by incomparable bases, including a member/query collision, unless the derived type declares that name explicitly. Binding, help, completion, and value formatting use this same resolved symbol set.
+
 A referenced base MUST already exist or appear in the same atomic descriptor set. The engine validates bases before derived types.
 
 ### 6.2 ValueAdapter
@@ -554,7 +556,7 @@ ShellLang source MUST receive a safe host-selected message. The runtime MUST NOT
 
 ## 12. Explicit descriptor construction
 
-Builders MAY use generic C# methods to reduce adapter code. They MUST still require explicit ShellLang names and metadata.
+Builders MAY use generic C# methods only when the CLR type is validated or extracted, such as type adapters, typed member access, and invocation-value extraction. Command port and argument declarations are non-generic because their `ShellTypeId` values are the complete contracts. Builders MUST still require explicit ShellLang names and metadata.
 
 This example shows the intended API shape:
 
@@ -575,13 +577,13 @@ var playerType = TypeDescriptorBuilder.For<Player>("Player")
 
 var damageCommand = CommandDescriptorBuilder.Create("damage")
     .Description("Damage one player.")
-    .Input<Player>("target", playerType.Id, isDefault: true)
-    .Argument<int>("amount", core.Int32)
-    .Argument<DamageType>(
+    .Input("target", playerType.Id, isDefault: true)
+    .Argument("amount", core.Int32)
+    .Argument(
         "type",
         damageType.Id,
         defaultValue: DamageType.Normal)
-    .Output<DamageResult>("result", damageResultType.Id, isDefault: true)
+    .Output("result", damageResultType.Id, isDefault: true)
     .Error(damageErrorType.Id)
     .Invoke((context, values) =>
     {
@@ -611,18 +613,19 @@ The example is not permission to infer names, descriptions, ports, defaults, or 
 3. No command uses an intrinsic name.
 4. Every referenced type is a core type, an existing type, or a type in the same valid descriptor set.
 5. The nominal type graph is acyclic.
-6. Each error has one valid error base chain.
-7. No descriptor uses `Stream<T>`.
-8. Every descriptor has a non-empty description.
-9. Every CLR adapter is present and compatible with its declared CLR type.
-10. Each command has at most one default input and one default output.
-11. Port, argument, output, member, and enum member names are unique in their local scope.
-12. Every optional argument has one exact typed default.
-13. Every command and query has one synchronous invoker.
-14. Every member has one synchronous getter.
-15. No host descriptor declares generic command type parameters.
-16. Every runtime fault code and name is valid and unique.
-17. Every command runtime fault reference resolves to a registered fault descriptor.
+6. Inherited member and query names resolve unambiguously.
+7. Each error has one valid error base chain.
+8. No descriptor uses `Stream<T>`.
+9. Every descriptor has a non-empty description.
+10. Every CLR adapter is present and compatible with its declared CLR type.
+11. Each command has at most one default input and one default output.
+12. Port, argument, output, member, and enum member names are unique in their local scope.
+13. Every optional argument has one exact typed default.
+14. Every command and query has one synchronous invoker.
+15. Every member has one synchronous getter.
+16. No host descriptor declares generic command type parameters.
+17. Every runtime fault code and name is valid and unique.
+18. Every command runtime fault reference resolves to a registered fault descriptor.
 
 A failed registration returns one or more `HostingDiagnostic` items. It MUST report all independent validation errors that it can find safely.
 
@@ -655,6 +658,8 @@ public sealed class ShellSession
 Adding or removing a binding increments `SchemaRevision`. Replacing a binding with a different type also increments it.
 
 Replacing a value with the same type does not change the schema revision.
+
+Public `SetBinding` and `RemoveBinding` calls throw `InvalidOperationException` while the session is executing. ShellLang assignments use an engine-internal commit path, so they can update bindings without allowing commands, queries, globals, members, or execution observers to invalidate compiled binding types. A rejected host mutation does not change the value or `SchemaRevision`, and the active host boundary contains the exception as a host fault.
 
 The compiler records the exact external names and types that a compilation reads. The runtime validates those requirements before execution.
 

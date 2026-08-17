@@ -248,7 +248,7 @@ public sealed partial class ShellEngine
 				outputs: [new("value", q.OutputType, q.Description)], errorType: q.ErrorType),
 			IntrinsicDescriptor i => new HelpItem(i.Id, i.Name, "intrinsic", i.Description),
 			TypeDescriptor t => new HelpItem(t.SymbolId, t.Name, "type", t.Description,
-				members: t.Members.Select(x => x.Name).Concat(t.Queries.Select(x => x.Name)).ToArray()),
+				members: GetTypeEntry(t.Id).ResolvedSymbols.Select(x => x.Name).ToArray()),
 			EnumTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "enum", e.Description, members: e.Members.Select(x => x.Name).ToArray()),
 			ErrorTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "error", e.Description),
 			_ => null
@@ -266,8 +266,10 @@ public sealed partial class ShellEngine
 		};
 		return command.ErrorType is { } e ? $"Result<{success},{TypeName(e)}>" : success;
 	}
-	private IEnumerable<MemberDescriptor> AccessibleMembers(ShellTypeId type) => WalkTypes(type).SelectMany(x => x.Members).DistinctBy(x => x.Name);
-	private IEnumerable<QueryDescriptor> AccessibleQueries(ShellTypeId type) => WalkTypes(type).SelectMany(x => x.Queries).DistinctBy(x => x.Name);
+	private IEnumerable<MemberDescriptor> AccessibleMembers(ShellTypeId type) =>
+		GetTypeEntry(type).ResolvedSymbols.Where(x => x.Member is not null).Select(x => x.Member!);
+	private IEnumerable<QueryDescriptor> AccessibleQueries(ShellTypeId type) =>
+		GetTypeEntry(type).ResolvedSymbols.Where(x => x.Query is not null).Select(x => x.Query!);
 	private IEnumerable<(string Name, ShellTypeId Type, string Description)> MemberCompletions(ShellTypeId type)
 	{
 		var entry = GetTypeEntry(type);
@@ -287,22 +289,6 @@ public sealed partial class ShellEngine
 			foreach (var item in MemberCompletions(entry.OutputFields![field]))
 				yield return item;
 	}
-	private IEnumerable<TypeEntry> WalkTypes(ShellTypeId type)
-	{
-		var queue = new Queue<ShellTypeId>();
-		var seen = new HashSet<ShellTypeId>();
-		queue.Enqueue(type);
-		while (queue.TryDequeue(out var id))
-		{
-			if (!seen.Add(id))
-				continue;
-			var e = GetTypeEntry(id);
-			yield return e;
-			foreach (var b in e.Bases)
-				queue.Enqueue(b);
-		}
-	}
-
 	private sealed class EmptyServiceProvider : IServiceProvider
 	{
 		public static EmptyServiceProvider Instance { get; } = new();

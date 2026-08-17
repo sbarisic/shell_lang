@@ -182,7 +182,7 @@ internal static class InteractiveConsole
 
 }
 
-internal static class Conformance
+internal static partial class Conformance
 {
 	private static int _passed;
 	public static void Run()
@@ -193,8 +193,11 @@ internal static class Conformance
 		Test("expanded collection intrinsics", ExpandedCollectionIntrinsics);
 		Test("empty reducer and require fault", EmptyRequire);
 		Test("registration is atomic", AtomicRegistration);
+		Test("nominal hierarchy and inherited symbols", NominalHierarchy);
 		Test("catalog and session requirements", Revisions);
+		Test("session binding isolation", SessionBindingIsolation);
 		Test("help and completion", Metadata);
+		Test("non-generic command builder declarations", CommandBuilderDeclarations);
 		Test("console print output", PrintOutput);
 		Test("descriptor-aware value formatting", ValueFormattingConformance.Run);
 		Test("terminal lifting, fault containment, and evaluation counts", AdvancedConformance.Run);

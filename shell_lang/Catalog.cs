@@ -100,6 +100,7 @@ internal sealed class TypeEntry
 	public IReadOnlyList<ShellTypeId> Bases { get; init; } = Array.Empty<ShellTypeId>();
 	public IReadOnlyList<MemberDescriptor> Members { get; init; } = Array.Empty<MemberDescriptor>();
 	public IReadOnlyList<QueryDescriptor> Queries { get; init; } = Array.Empty<QueryDescriptor>();
+	public IReadOnlyList<ResolvedTypeSymbol> ResolvedSymbols { get; init; } = Array.Empty<ResolvedTypeSymbol>();
 	public IReadOnlyList<EnumMemberDescriptor> EnumMembers { get; init; } = Array.Empty<EnumMemberDescriptor>();
 	public EqualityDescriptor? Equality
 	{
@@ -129,6 +130,13 @@ internal sealed class TypeEntry
 	{
 		get; init;
 	}
+}
+
+internal sealed record ResolvedTypeSymbol(ShellTypeId DeclaringType, MemberDescriptor? Member, QueryDescriptor? Query)
+{
+	public string Name => Member?.Name ?? Query!.Name;
+	public string Kind => Member is null ? "query" : "member";
+	public object Descriptor => (object?)Member ?? Query!;
 }
 
 public sealed class DescriptorCatalog
@@ -319,49 +327,43 @@ public sealed partial class ShellEngine
 
 	internal ShellTypeId CommonError(ShellTypeId left, ShellTypeId right)
 	{
-		var ancestors = new HashSet<ShellTypeId>();
-		for (var current = left; ;)
+		var leftDistances = AncestorDistances(left);
+		var rightDistances = AncestorDistances(right);
+		return leftDistances.Keys.Intersect(rightDistances.Keys)
+			.OrderBy(id => Math.Max(leftDistances[id], rightDistances[id]))
+			.ThenBy(id => leftDistances[id] + rightDistances[id])
+			.ThenBy(id => GetTypeEntry(id).Name, StringComparer.Ordinal)
+			.FirstOrDefault(Core.Error);
+	}
+
+	private Dictionary<ShellTypeId, int> AncestorDistances(ShellTypeId type)
+	{
+		var distances = new Dictionary<ShellTypeId, int> { [type] = 0 };
+		var queue = new Queue<ShellTypeId>();
+		queue.Enqueue(type);
+		while (queue.TryDequeue(out var current))
 		{
-			ancestors.Add(current);
-			var bases = GetTypeEntry(current).Bases;
-			if (bases.Count == 0)
-				break;
-			current = bases[0];
+			var nextDistance = distances[current] + 1;
+			foreach (var parent in GetTypeEntry(current).Bases)
+				if (!distances.TryGetValue(parent, out var previous) || nextDistance < previous)
+				{
+					distances[parent] = nextDistance;
+					queue.Enqueue(parent);
+				}
 		}
-		for (var current = right; ;)
-		{
-			if (ancestors.Contains(current))
-				return current;
-			var bases = GetTypeEntry(current).Bases;
-			if (bases.Count == 0)
-				return Core.Error;
-			current = bases[0];
-		}
+		return distances;
 	}
 
 	internal TypeEntry? FindMemberOwner(ShellTypeId receiver, string name, out MemberDescriptor? member, out QueryDescriptor? query)
 	{
-		member = null;
-		query = null;
-		var queue = new Queue<ShellTypeId>();
-		queue.Enqueue(receiver);
-		var seen = new HashSet<ShellTypeId>();
-		while (queue.TryDequeue(out var id))
-		{
-			if (!seen.Add(id))
-				continue;
-			var entry = GetTypeEntry(id);
-			member = entry.Members.FirstOrDefault(x => x.Name == name);
-			query = entry.Queries.FirstOrDefault(x => x.Name == name);
-			if (member is not null || query is not null)
-				return entry;
-			foreach (var parent in entry.Bases)
-				queue.Enqueue(parent);
-		}
-		return null;
+		var symbol = GetTypeEntry(receiver).ResolvedSymbols.FirstOrDefault(x => x.Name == name);
+		member = symbol?.Member;
+		query = symbol?.Query;
+		return symbol is null ? null : GetTypeEntry(symbol.DeclaringType);
 	}
 
-	private List<HostingDiagnostic> Validate(DescriptorSet set)
+	private List<HostingDiagnostic> Validate(DescriptorSet set,
+		out Dictionary<ShellTypeId, IReadOnlyList<ResolvedTypeSymbol>> resolvedSymbols)
 	{
 		var d = new List<HostingDiagnostic>();
 		var newTypeNames = new HashSet<string>(StringComparer.Ordinal);
@@ -442,6 +444,7 @@ public sealed partial class ShellEngine
 		}
 		ValidateTypeCycles(set.Types, d);
 		ValidateErrorCycles(set.Errors, d);
+		resolvedSymbols = ResolveTypeSymbols(set.Types, d);
 		var commandNames = new HashSet<string>(Commands.Keys, StringComparer.Ordinal);
 		foreach (var command in set.Commands)
 		{
@@ -512,6 +515,80 @@ public sealed partial class ShellEngine
 		}
 		return d;
 	}
+
+	private Dictionary<ShellTypeId, IReadOnlyList<ResolvedTypeSymbol>> ResolveTypeSymbols(
+		IReadOnlyList<TypeDescriptor> types, List<HostingDiagnostic> diagnostics)
+	{
+		var descriptors = types.ToDictionary(x => x.Id);
+		var resolved = new Dictionary<ShellTypeId, IReadOnlyList<ResolvedTypeSymbol>>();
+		var resolving = new HashSet<ShellTypeId>();
+
+		IReadOnlyList<ResolvedTypeSymbol> Resolve(ShellTypeId id)
+		{
+			if (resolved.TryGetValue(id, out var cached))
+				return cached;
+			if (_typeEntries.TryGetValue(id, out var existing))
+				return existing.ResolvedSymbols;
+			if (!descriptors.TryGetValue(id, out var descriptor) || !resolving.Add(id))
+				return Array.Empty<ResolvedTypeSymbol>();
+
+			var local = descriptor.Members.Select(x => new ResolvedTypeSymbol(id, x, null))
+				.Concat(descriptor.Queries.Select(x => new ResolvedTypeSymbol(id, null, x))).ToArray();
+			var inherited = descriptor.DirectBases.SelectMany(Resolve).ToArray();
+			var result = new List<ResolvedTypeSymbol>(local);
+			foreach (var group in inherited.Where(x => local.All(localSymbol => localSymbol.Name != x.Name))
+				.GroupBy(x => x.Name, StringComparer.Ordinal).OrderBy(x => x.Key, StringComparer.Ordinal))
+			{
+				var candidates = group.GroupBy(x => (x.DeclaringType, x.Descriptor)).Select(x => x.First()).ToArray();
+				var winners = candidates.Where(candidate => !candidates.Any(other =>
+					!ReferenceEquals(candidate, other) && IsNominalSubtype(other.DeclaringType, candidate.DeclaringType, descriptors))).ToArray();
+				if (winners.Length > 1)
+				{
+					var sources = string.Join(", ", winners.OrderBy(x => TypeName(x.DeclaringType, descriptors), StringComparer.Ordinal)
+						.Select(x => $"{TypeName(x.DeclaringType, descriptors)} ({x.Kind})"));
+					diagnostics.Add(new("SL3021", $"Type '{descriptor.Name}' inherits ambiguous symbol '{group.Key}' from incomparable bases {sources}; declare '{group.Key}' on '{descriptor.Name}' to resolve it."));
+					continue;
+				}
+				if (winners.Length == 1)
+					result.Add(winners[0]);
+			}
+			resolving.Remove(id);
+			resolved[id] = result;
+			return result;
+		}
+
+		foreach (var type in types)
+			Resolve(type.Id);
+		return resolved;
+	}
+
+	private bool IsNominalSubtype(ShellTypeId actual, ShellTypeId expected,
+		IReadOnlyDictionary<ShellTypeId, TypeDescriptor> pending)
+	{
+		if (actual == expected)
+			return true;
+		var seen = new HashSet<ShellTypeId>();
+		var queue = new Queue<ShellTypeId>();
+		queue.Enqueue(actual);
+		while (queue.TryDequeue(out var current))
+		{
+			if (!seen.Add(current))
+				continue;
+			var bases = pending.TryGetValue(current, out var descriptor)
+				? descriptor.DirectBases
+				: _typeEntries.TryGetValue(current, out var entry) ? entry.Bases : Array.Empty<ShellTypeId>();
+			foreach (var parent in bases)
+			{
+				if (parent == expected)
+					return true;
+				queue.Enqueue(parent);
+			}
+		}
+		return false;
+	}
+
+	private string TypeName(ShellTypeId type, IReadOnlyDictionary<ShellTypeId, TypeDescriptor> pending) =>
+		pending.TryGetValue(type, out var descriptor) ? descriptor.Name : GetTypeEntry(type).Name;
 
 	private static void ValidateLocalNames(string owner, IEnumerable<string> names, List<HostingDiagnostic> diagnostics)
 	{
@@ -584,7 +661,7 @@ public sealed partial class ShellEngine
 	public RegistrationResult Register(DescriptorSet descriptors)
 	{
 		ArgumentNullException.ThrowIfNull(descriptors);
-		var diagnostics = Validate(descriptors);
+		var diagnostics = Validate(descriptors, out var resolvedSymbols);
 		if (diagnostics.Count > 0)
 			return new RegistrationResult(diagnostics);
 		foreach (var type in descriptors.Types)
@@ -611,6 +688,7 @@ public sealed partial class ShellEngine
 				Bases = type.DirectBases,
 				Members = type.Members,
 				Queries = type.Queries,
+				ResolvedSymbols = resolvedSymbols[type.Id],
 				Equality = type.Equality,
 				Ordering = type.Ordering
 			});

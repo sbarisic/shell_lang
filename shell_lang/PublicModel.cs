@@ -299,6 +299,11 @@ public sealed class ShellSession
 	public bool TryGetBinding(string name, out ShellValue value) => _bindings.TryGetValue(name, out value!);
 	public SessionUpdateResult SetBinding(string name, ShellValue value)
 	{
+		EnsureHostMutationAllowed();
+		return CommitBinding(name, value);
+	}
+	internal SessionUpdateResult CommitBinding(string name, ShellValue value)
+	{
 		ArgumentException.ThrowIfNullOrEmpty(name);
 		ArgumentNullException.ThrowIfNull(value);
 		var added = !_bindings.TryGetValue(name, out var old);
@@ -310,10 +315,20 @@ public sealed class ShellSession
 	}
 	public bool RemoveBinding(string name)
 	{
+		EnsureHostMutationAllowed();
+		return RemoveBindingFromEvaluator(name);
+	}
+	internal bool RemoveBindingFromEvaluator(string name)
+	{
 		if (!_bindings.Remove(name))
 			return false;
 		SchemaRevision++;
 		return true;
+	}
+	private void EnsureHostMutationAllowed()
+	{
+		if (IsExecuting)
+			throw new InvalidOperationException("Session bindings cannot be changed by the host while the session is executing.");
 	}
 	public IReadOnlyList<SessionBindingInfo> GetBindings() => _bindings
 		.OrderBy(static pair => pair.Key, StringComparer.Ordinal)

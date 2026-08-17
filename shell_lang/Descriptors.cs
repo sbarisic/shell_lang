@@ -703,17 +703,17 @@ public sealed class CommandBuilder
 		_description = value;
 		return this;
 	}
-	public CommandBuilder Input<T>(string name, ShellTypeId type, bool isDefault = false, string description = "Input port.") where T : notnull
+	public CommandBuilder Input(string name, ShellTypeId type, bool isDefault = false, string description = "Input port.")
 	{
 		_inputs.Add(new InputPortDescriptor(name, description, type, isDefault));
 		return this;
 	}
-	public CommandBuilder Argument<T>(string name, ShellTypeId type, bool required = true, ShellValue? defaultValue = null, string description = "Argument.") where T : notnull
+	public CommandBuilder Argument(string name, ShellTypeId type, bool required = true, ShellValue? defaultValue = null, string description = "Argument.")
 	{
 		_arguments.Add(new ArgumentDescriptor(name, description, type, _arguments.Count, required, defaultValue));
 		return this;
 	}
-	public CommandBuilder Output<T>(string name, ShellTypeId type, bool isDefault = false, string description = "Output port.") where T : notnull
+	public CommandBuilder Output(string name, ShellTypeId type, bool isDefault = false, string description = "Output port.")
 	{
 		_outputs.Add(new OutputPortDescriptor(name, description, type, isDefault));
 		return this;

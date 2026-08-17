@@ -66,7 +66,7 @@ internal sealed class Evaluator
 			{
 				if (outcome.Value is null)
 					return HostResult("SL5006", "An assignment produced Void.", statement.Span, completed);
-				_session.SetBinding(assignment.Name, outcome.Value);
+				_session.CommitBinding(assignment.Name, outcome.Value);
 				final = null;
 			}
 			else
