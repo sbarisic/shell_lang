@@ -54,7 +54,8 @@ public sealed class CompilationDiagnostic
 {
 	internal CompilationDiagnostic(string code, string message, SourceSpan source,
 		ShellTypeId? expectedType = null, ShellTypeId? actualType = null,
-		IReadOnlyList<string>? attemptedAdaptations = null, string? symbolName = null)
+		IReadOnlyList<string>? attemptedAdaptations = null, string? symbolName = null,
+		ShellTypeId? contextType = null)
 	{
 		Code = code;
 		Message = message;
@@ -63,6 +64,7 @@ public sealed class CompilationDiagnostic
 		ActualType = actualType;
 		AttemptedAdaptations = attemptedAdaptations ?? Array.Empty<string>();
 		SymbolName = symbolName;
+		ContextType = contextType;
 	}
 	public string Code
 	{
@@ -90,6 +92,10 @@ public sealed class CompilationDiagnostic
 		get;
 	}
 	public string? SymbolName
+	{
+		get;
+	}
+	public ShellTypeId? ContextType
 	{
 		get;
 	}
@@ -362,7 +368,7 @@ public sealed class ExecutionOptions
 
 public enum CompletionItemKind
 {
-	Binding, Global, Type, Command, Intrinsic, Member, Argument, Port, EnumMember
+	Binding, Global, Type, Command, Intrinsic, Member, Argument, Port, EnumMember, Context
 }
 public sealed record CompletionItem(SourceSpan ReplacementSpan, string InsertionText,
 	CompletionItemKind Kind, string DisplayType, string Description);
@@ -383,7 +389,8 @@ public sealed class HelpItem
 	internal HelpItem(SymbolId id, string name, string kind, string description,
 		IReadOnlyList<HelpParameter>? inputs = null, IReadOnlyList<HelpParameter>? arguments = null,
 		IReadOnlyList<HelpParameter>? outputs = null, ShellTypeId? errorType = null,
-		IReadOnlyList<RuntimeFaultDescriptor>? runtimeFaults = null, IReadOnlyList<string>? members = null)
+		IReadOnlyList<RuntimeFaultDescriptor>? runtimeFaults = null, IReadOnlyList<string>? members = null,
+		ShellTypeId? contextType = null)
 	{
 		Id = id;
 		Name = name;
@@ -395,6 +402,7 @@ public sealed class HelpItem
 		ErrorType = errorType;
 		RuntimeFaults = runtimeFaults ?? Array.Empty<RuntimeFaultDescriptor>();
 		Members = members ?? Array.Empty<string>();
+		ContextType = contextType;
 	}
 	public SymbolId Id
 	{
@@ -433,6 +441,10 @@ public sealed class HelpItem
 		get;
 	}
 	public IReadOnlyList<string> Members
+	{
+		get;
+	}
+	public ShellTypeId? ContextType
 	{
 		get;
 	}

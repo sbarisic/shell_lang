@@ -13,6 +13,14 @@ target = find_entities(classname: "info_spawn")
 target.position -> print
 ```
 
+`this` names the effective value at the current operation. Host types can also expose one explicit constructor:
+
+```shelllang
+local_player -> give_credits(amount: this.name_length()) -> require
+transform = Transform(Vector3(1, 2, 3), Quaternion(), Vector3(1, 1, 1))
+transform.position.x -> print
+```
+
 The language uses a small set of connection forms:
 
 ```text
@@ -62,7 +70,7 @@ players.health -> sum -> print
 
 ## Version 0.1 boundaries
 
-Version 0.1 does not include functions, loops, blocks, lambdas, async commands, executable streams, reflection, property mutation, or OS process execution.
+Version 0.1 does not include functions, loops, blocks, lambdas, async commands, executable streams, reflection-based construction, property mutation, or OS process execution.
 
 These limits keep the first implementation focused on typed commands, connection adaptation, arrays, Results, and explicit host descriptors.
 

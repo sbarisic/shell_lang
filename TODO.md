@@ -20,7 +20,7 @@
 
 ## Next language capabilities
 
-- [ ] Generalize contextual expressions with an explicit `this` value so lifted operations can derive secondary inputs from each effective primary invocation.
+- [x] Generalize contextual expressions with an explicit `this` value so lifted operations can derive secondary inputs from each effective primary invocation.
 
   - **Meaning and syntax:** Define `this` as the effective primary input of the operation currently being evaluated. Allow member access, queries, constructors, and other normal expressions rooted at `this`, so `player -> heal(amount: this.health * 0.5)` binds `this` as `Player`. Make the existing contextual leading-dot form shorthand for `this.` rather than a separate mechanism, so `where(.health < 50)` and `where(this.health < 50)` are equivalent. Reserve `this` as a contextual keyword and reject it when no enclosing primary-operation context exists, including top-level assignments and standalone zero-input calls.
   - **Dispatch and lifting:** Resolve exact whole-value input before scalar array lifting, then type `this` from the resulting effective invocation. If an operation accepts `Array<Player>`, `this` is the whole array; if a scalar `Player` operation is lifted over `Array<Player>`, `this` is each player in turn. Preserve active array-index paths and the existing Result propagation, declared-error, mutation-return, terminal-lifting, and host-fault rules.

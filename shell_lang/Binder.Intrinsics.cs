@@ -27,6 +27,7 @@ internal sealed partial class Binder
 				_ => _engine.Core.Bool
 			};
 			var secondaries = new List<BoundSecondary>();
+			var resultScope = CreateContext(primary.Type);
 			if (kind == IntrinsicKind.ValueOr)
 			{
 				if (success == _engine.Core.Void)
@@ -37,27 +38,37 @@ internal sealed partial class Binder
 				else
 				{
 					var arg = entries[0];
-					var expression = BindExpression(arg.Expression, success);
+					var expression = InContext(resultScope, () => BindExpression(arg.Expression, success));
 					secondaries.Add(new("default", false, expression, BuildAdaptation(expression.Type, success, false, arg.Span), arg.Span));
 				}
 			}
 			else if (entries.Count != 0)
 				Error("SL2405", $"Intrinsic '{name}' takes no arguments.", span);
+			secondaries = MarkContextual(secondaries, resultScope).ToList();
+			var contextualOutput = CombineContextualDirectOutput(resultOutput, secondaries, resultScope.Id);
 			var op = new BoundIntrinsicOperation(kind, primary.Type, resultOutput, span);
-			return new BoundApplyExpression(primary, op, new(AdaptationKind.Direct, primary.Type, resultOutput), secondaries, CombineSecondaryResults(resultOutput, secondaries), span);
+			var plan = new AdaptationPlan(AdaptationKind.Direct, primary.Type, contextualOutput);
+			var ordinary = secondaries.Where(x => x.ContextScopeId != resultScope.Id).ToArray();
+			return new BoundApplyExpression(primary, op, plan, secondaries,
+				CombineSecondaryResults(plan.OutputType, ordinary), span);
 		}
 		var collectionType = FindCollectionInput(primary.Type);
 		if (collectionType is null)
 			return ErrorExpression("SL2406", $"Intrinsic '{name}' requires Array<T>.", span);
 		var collectionEntry = _engine.GetTypeEntry(collectionType.Value);
 		var element = collectionEntry.ElementType!.Value;
+		var collectionPreliminary = BuildAdaptation(primary.Type, collectionType.Value, false, span, collectionType.Value);
+		var collectionScope = CreateContext(EffectiveContextType(collectionPreliminary));
 
 		BoundExpression Apply(IntrinsicKind kind, ShellTypeId directOutput,
 			IReadOnlyList<BoundSecondary>? secondaries = null, BoundExpression? context = null)
 		{
 			secondaries ??= [];
-			var primaryPlan = BuildAdaptation(primary.Type, collectionType.Value, false, span, directOutput);
-			var finalOutput = CombineSecondaryResults(primaryPlan.OutputType, secondaries);
+			secondaries = MarkContextual(secondaries, collectionScope);
+			var contextualOutput = CombineContextualDirectOutput(directOutput, secondaries, collectionScope.Id);
+			var primaryPlan = BuildAdaptation(primary.Type, collectionType.Value, false, span, contextualOutput);
+			var ordinary = secondaries.Where(x => x.ContextScopeId != collectionScope.Id).ToArray();
+			var finalOutput = CombineSecondaryResults(primaryPlan.OutputType, ordinary);
 			var op = new BoundIntrinsicOperation(kind, collectionType.Value, directOutput, span, context);
 			return new BoundApplyExpression(primary, op, primaryPlan,
 				secondaries, finalOutput, span);
@@ -74,14 +85,8 @@ internal sealed partial class Binder
 			if (!TryMatchIntrinsicArguments(name, entries, [parameter], span, out var matched))
 				return new BoundErrorExpression(_engine.Core.Any, span);
 			var arg = matched[0].Entry;
-			var old = _contextType;
-			BoundExpression contextual;
-			try
-			{
-				_contextType = element;
-				contextual = BindExpression(arg.Expression);
-			}
-			finally { _contextType = old; }
+			var contextScope = CreateContext(element);
+			var contextual = InContext(contextScope, () => BindExpression(arg.Expression));
 			var contextualEntry = _engine.GetTypeEntry(contextual.Type);
 			var contextualValue = contextualEntry.Kind == ShellTypeKind.Result ? contextualEntry.SuccessType!.Value : contextual.Type;
 			if (name is "where" or "any" or "all" && contextualValue != _engine.Core.Bool)
@@ -110,12 +115,15 @@ internal sealed partial class Binder
 				"select" => IntrinsicKind.Select,
 				_ => IntrinsicKind.Distinct
 			};
-			return Apply(kind, directOutput, context: contextual);
+			var primaryPlan = BuildAdaptation(primary.Type, collectionType.Value, false, span, directOutput);
+			var contextualOperation = new BoundIntrinsicOperation(kind, collectionType.Value, directOutput, span,
+				contextual, contextScope.Id);
+			return new BoundApplyExpression(primary, contextualOperation, primaryPlan, [], primaryPlan.OutputType, span);
 		}
 
 		if (name is "take" or "skip")
 		{
-			var secondaries = BindIntrinsicValueArguments(name, entries, [("count", _engine.Core.Int32)], span);
+			var secondaries = BindIntrinsicValueArguments(name, entries, [("count", _engine.Core.Int32)], span, collectionScope);
 			if (secondaries is null)
 				return new BoundErrorExpression(_engine.Core.Any, span);
 			if (IsNegativeInt32Literal(secondaries[0].Expression))
@@ -125,14 +133,14 @@ internal sealed partial class Binder
 
 		if (name == "at")
 		{
-			var secondaries = BindIntrinsicValueArguments(name, entries, [("index", _engine.Core.Int32)], span);
+			var secondaries = BindIntrinsicValueArguments(name, entries, [("index", _engine.Core.Int32)], span, collectionScope);
 			return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.At, element, secondaries);
 		}
 
 		if (name == "slice")
 		{
 			var secondaries = BindIntrinsicValueArguments(name, entries,
-				[("start", _engine.Core.Int32), ("count", _engine.Core.Int32)], span);
+				[("start", _engine.Core.Int32), ("count", _engine.Core.Int32)], span, collectionScope);
 			if (secondaries is null)
 				return new BoundErrorExpression(_engine.Core.Any, span);
 			var count = secondaries.Single(x => x.Name == "count");
@@ -145,13 +153,13 @@ internal sealed partial class Binder
 		{
 			if (!HasEquality(element))
 				Error("SL2425", "contains requires elements with registered equality.", span);
-			var secondaries = BindIntrinsicValueArguments(name, entries, [("value", element)], span);
+			var secondaries = BindIntrinsicValueArguments(name, entries, [("value", element)], span, collectionScope);
 			return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.Contains, _engine.Core.Bool, secondaries);
 		}
 
 		if (name == "concat")
 		{
-			var secondaries = BindIntrinsicValueArguments(name, entries, [("other", collectionType.Value)], span);
+			var secondaries = BindIntrinsicValueArguments(name, entries, [("other", collectionType.Value)], span, collectionScope);
 			return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.Concat, collectionType.Value, secondaries);
 		}
 
@@ -236,7 +244,7 @@ internal sealed partial class Binder
 	}
 
 	private List<BoundSecondary>? BindIntrinsicValueArguments(string intrinsic, IReadOnlyList<InvocationEntrySyntax> entries,
-		IReadOnlyList<(string Name, ShellTypeId Type)> parameters, SourceSpan span)
+		IReadOnlyList<(string Name, ShellTypeId Type)> parameters, SourceSpan span, ContextScope scope)
 	{
 		if (!TryMatchIntrinsicArguments(intrinsic, entries, parameters.Select(x => x.Name).ToArray(), span, out var matched))
 			return null;
@@ -245,7 +253,7 @@ internal sealed partial class Binder
 		foreach (var (name, entry) in matched)
 		{
 			var expected = parameterTypes[name];
-			var expression = BindExpression(entry.Expression, expected);
+			var expression = InContext(scope, () => BindExpression(entry.Expression, expected));
 			secondaries.Add(new(name, false, expression,
 				BuildAdaptation(expression.Type, expected, false, entry.Span), entry.Span));
 		}

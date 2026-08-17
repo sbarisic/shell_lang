@@ -20,7 +20,7 @@ The host MUST register each accessible type, global, member, query, and command 
 
 The runtime invokes all operations synchronously on the caller's thread. ShellLang 0.1 has no scheduler and no implicit concurrency.
 
-Registered member reads and queries MUST be read-only. Commands are the only registered operations that can change host state.
+Registered member reads, queries, and constructors MUST be read-only. Commands are the only registered operations that can change host state.
 
 The host remains responsible for the effects and security of its command code.
 
@@ -45,6 +45,7 @@ public sealed record CollectionCardinalityError;
 
 public sealed class DescriptorSet;
 public sealed class TypeDescriptor;
+public sealed class ConstructorDescriptor;
 public sealed class EnumTypeDescriptor;
 public sealed class ErrorTypeDescriptor;
 public sealed class GlobalDescriptor;
@@ -55,6 +56,8 @@ public sealed class InputPortDescriptor;
 public sealed class ArgumentDescriptor;
 public sealed class OutputPortDescriptor;
 public sealed class RuntimeFaultDescriptor;
+public abstract record ConstructorOutcome;
+public abstract record ConstructorOutcome<T>;
 
 public sealed class CompilationDiagnostic;
 public sealed class RuntimeFault;
@@ -184,6 +187,7 @@ public sealed class TypeDescriptor
     public IReadOnlyList<QueryDescriptor> Queries { get; }
     public EqualityDescriptor? Equality { get; }
     public OrderingDescriptor? Ordering { get; }
+    public ConstructorDescriptor? Constructor { get; }
 }
 ```
 
@@ -196,6 +200,41 @@ The non-error type graph MUST be acyclic. It can contain several declared bases 
 Members and queries share one inherited symbol namespace. A local declaration resolves the same inherited name. If no local declaration exists, the most-derived inherited declaration wins, and a declaration reached repeatedly through a diamond appears once. Registration MUST reject a name contributed by incomparable bases, including a member/query collision, unless the derived type declares that name explicitly. Binding, help, completion, and value formatting use this same resolved symbol set.
 
 A referenced base MUST already exist or appear in the same atomic descriptor set. The engine validates bases before derived types.
+
+### 6.1.1 ConstructorDescriptor
+
+A nominal host type can expose at most one non-inherited constructor:
+
+```csharp
+public delegate ConstructorOutcome ConstructorInvoker(
+    InvocationContext context,
+    InvocationValues values);
+
+public sealed class ConstructorDescriptor
+{
+    public IReadOnlyList<ArgumentDescriptor> Arguments { get; }
+    public ShellTypeId? ErrorType { get; }
+    public ConstructorInvoker Invoke { get; }
+}
+
+public abstract record ConstructorOutcome
+{
+    public sealed record Success(ShellValue Value) : ConstructorOutcome;
+    public sealed record Error(ShellValue Value) : ConstructorOutcome;
+}
+
+public abstract record ConstructorOutcome<T>
+{
+    public sealed record Success(T Value) : ConstructorOutcome<T>;
+    public sealed record Error(ShellValue Value) : ConstructorOutcome<T>;
+}
+```
+
+`TypeDescriptorBuilder<T>.Constructor(...)` accepts a factory that returns `T`. `FallibleConstructor(...)` accepts a declared error type and returns `ConstructorOutcome<T>`. The builder wraps a successful `T` through the owning type adapter. Direct descriptors return non-generic `ConstructorOutcome` values.
+
+Constructors are synchronous and contractually pure. The runtime evaluates their arguments once in source order, validates the success value against the owning descriptor, and validates errors against `ErrorType`. A null or unknown outcome, a wrong constructed value, an undeclared or wrong error, or a delegate exception becomes an `SL5117`-`SL5119` host fault. A constructor cannot mutate public session bindings while execution is active; the execution guard contains that attempt at the constructor boundary.
+
+Core, enum, error, output-record, array, and Result types are not host-constructible. Constructors are explicit metadata: the engine MUST NOT discover CLR constructors, conversion operators, fields, or properties through reflection.
 
 ### 6.2 ValueAdapter
 
@@ -573,6 +612,9 @@ var playerType = TypeDescriptorBuilder.For<Player>("Player")
         arguments: [Argument.Required<Entity>("to", entityType.Id)],
         output: core.Float32,
         invoke: (player, values) => player.DistanceTo(values.Get<Entity>("to")))
+    .Constructor(
+        [new ArgumentDescriptor("name", "Player name.", core.String, 0)],
+        (context, values) => new Player(values.GetArgument<string>("name")))
     .Build();
 
 var damageCommand = CommandDescriptorBuilder.Create("damage")
@@ -610,7 +652,7 @@ The example is not permission to infer names, descriptions, ports, defaults, or 
 
 1. All names follow the ShellLang identifier rules.
 2. All names are unique in their catalog group.
-3. No command uses an intrinsic name.
+3. No constructible type, command, or intrinsic shares a callable name.
 4. Every referenced type is a core type, an existing type, or a type in the same valid descriptor set.
 5. The nominal type graph is acyclic.
 6. Inherited member and query names resolve unambiguously.
@@ -626,8 +668,12 @@ The example is not permission to infer names, descriptions, ports, defaults, or 
 16. No host descriptor declares generic command type parameters.
 17. Every runtime fault code and name is valid and unique.
 18. Every command runtime fault reference resolves to a registered fault descriptor.
+19. The reserved name `this` does not appear in script-visible descriptor metadata.
+20. Each constructor argument and declared error follows the same validation rules as a query argument and query error.
 
 A failed registration returns one or more `HostingDiagnostic` items. It MUST report all independent validation errors that it can find safely.
+
+`SL3022` reports any attempted use of the reserved script-visible name `this`. `SL3023` reports a callable-name collision involving a constructible type, command, or intrinsic. Both failures are atomic and leave the catalog revision unchanged.
 
 The result has this semantic shape:
 
@@ -659,7 +705,7 @@ Adding or removing a binding increments `SchemaRevision`. Replacing a binding wi
 
 Replacing a value with the same type does not change the schema revision.
 
-Public `SetBinding` and `RemoveBinding` calls throw `InvalidOperationException` while the session is executing. ShellLang assignments use an engine-internal commit path, so they can update bindings without allowing commands, queries, globals, members, or execution observers to invalidate compiled binding types. A rejected host mutation does not change the value or `SchemaRevision`, and the active host boundary contains the exception as a host fault.
+Public `SetBinding` and `RemoveBinding` calls throw `InvalidOperationException` while the session is executing. ShellLang assignments use an engine-internal commit path, so they can update bindings without allowing commands, queries, constructors, globals, members, or execution observers to invalidate compiled binding types. A rejected host mutation does not change the value or `SchemaRevision`, and the active host boundary contains the exception as a host fault.
 
 The compiler records the exact external names and types that a compilation reads. The runtime validates those requirements before execution.
 
@@ -694,6 +740,8 @@ The compiler processes statements in order. It updates its local symbol table af
 `SourceSpan` uses a zero-based UTF-16 offset and length. It also exposes one-based line and column values for display.
 
 All compiler diagnostics and runtime faults MUST identify a source span when source caused the error.
+
+`CompilationDiagnostic.ContextType` is nullable. Within a contextual expression it reports the exact effective static type of `this`; outside such a scope it is null.
 
 ### 15.3 Diagnostic groups
 
@@ -830,6 +878,7 @@ The engine MUST expose descriptors and compiler intrinsics through one read-only
 - Declared error type
 - Declared runtime fault codes and descriptions
 - Members or enum values when applicable
+- Nullable `ContextType`
 
 `GetCompletions` MUST use the parser and static context. It SHOULD suggest:
 
@@ -839,8 +888,10 @@ The engine MUST expose descriptors and compiler intrinsics through one read-only
 - Registered members for the receiver type
 - Contextual enum members
 - Intrinsics valid for the current type
+- `this` and members of its exact effective type only in a valid contextual expression
+- Constructible nominal types and constructor signatures in expression position, but not pipeline-stage position
 
-A completion item contains a replacement span, insertion text, symbol kind, display type, and short description.
+A completion item contains a replacement span, insertion text, symbol kind, display type, and short description. `CompletionItemKind.Context` identifies the `this` suggestion. Command help reports the declared default-input context, query help reports its receiver context, and type help reports constructor arguments, defaults, output, and declared error.
 
 The host can build `help`, autocomplete, and editor features without executing a command.
 

@@ -17,6 +17,8 @@ public sealed partial class ShellEngine
 		{
 			if (!IdentifierPattern.IsMatch(name))
 				d.Add(new("SL3001", $"Invalid {kind} name '{name}'."));
+			if (name == "this")
+				d.Add(new("SL3022", $"The reserved contextual name 'this' cannot be registered as a {kind}."));
 		}
 		foreach (var item in set.Types.Cast<object>().Concat(set.Enums).Concat(set.Errors))
 		{
@@ -75,12 +77,36 @@ public sealed partial class ShellEngine
 				if (query.ErrorType is { } queryError && !(newErrorIds.Contains(queryError) || (_typeEntries.TryGetValue(queryError, out var queryErrorEntry) && queryErrorEntry.Kind == ShellTypeKind.Error)))
 					d.Add(new("SL3017", $"Query '{type.Name}.{query.Name}' has a non-error ErrorType."));
 			}
+			if (type.Constructor is { } constructor)
+			{
+				ValidateLocalNames($"{type.Name} constructor", constructor.Arguments.Select(x => x.Name), d);
+				foreach (var argument in constructor.Arguments)
+				{
+					Name(argument.Name, "constructor argument");
+					if (string.IsNullOrWhiteSpace(argument.Description))
+						d.Add(new("SL3003", $"Constructor argument '{type.Name}.{argument.Name}' needs a description."));
+					if (!IsKnownTypeReference(argument.Type, available))
+						d.Add(new("SL3005", $"Constructor argument '{type.Name}.{argument.Name}' has unknown type."));
+					if ((!argument.Required && argument.DefaultValue is null) ||
+						(argument.DefaultValue is not null && argument.DefaultValue.Type != argument.Type))
+						d.Add(new("SL3010", $"Constructor argument '{type.Name}.{argument.Name}' has an invalid default."));
+				}
+				if (constructor.Arguments.Select(x => x.Position).Distinct().Count() != constructor.Arguments.Count ||
+					constructor.Arguments.Any(x => x.Position < 0))
+					d.Add(new("SL3020", $"Constructor '{type.Name}' has invalid positional argument indices."));
+				if (constructor.ErrorType is { } constructorError &&
+					!(newErrorIds.Contains(constructorError) ||
+					(_typeEntries.TryGetValue(constructorError, out var constructorErrorEntry) && constructorErrorEntry.Kind == ShellTypeKind.Error)))
+					d.Add(new("SL3017", $"Constructor '{type.Name}' has a non-error ErrorType."));
+			}
 		}
 		foreach (var type in set.Enums)
 		{
 			if (type.Members.Count == 0)
 				d.Add(new("SL3006", $"Enum '{type.Name}' has no members."));
 			ValidateLocalNames(type.Name, type.Members.Select(x => x.Name), d);
+			foreach (var member in type.Members)
+				Name(member.Name, "enum member");
 		}
 		foreach (var error in set.Errors)
 		{
@@ -91,12 +117,20 @@ public sealed partial class ShellEngine
 		ValidateTypeCycles(set.Types, d);
 		ValidateErrorCycles(set.Errors, d);
 		resolvedSymbols = ResolveTypeSymbols(set.Types, d);
+		var callableNames = new HashSet<string>(IntrinsicNames, StringComparer.Ordinal);
+		callableNames.UnionWith(Commands.Keys);
+		callableNames.UnionWith(Types.Where(x => x.Constructor is not null).Select(x => x.Name));
+		foreach (var type in set.Types.Where(x => x.Constructor is not null))
+			if (!callableNames.Add(type.Name))
+				d.Add(new("SL3023", $"Constructible type '{type.Name}' collides with an existing callable name."));
 		var commandNames = new HashSet<string>(Commands.Keys, StringComparer.Ordinal);
 		foreach (var command in set.Commands)
 		{
 			Name(command.Name, "command");
 			if (!commandNames.Add(command.Name) || IntrinsicNames.Contains(command.Name))
 				d.Add(new("SL3007", $"Duplicate or reserved command '{command.Name}'."));
+			if (!callableNames.Add(command.Name))
+				d.Add(new("SL3023", $"Command '{command.Name}' collides with a constructible type or intrinsic."));
 			if (string.IsNullOrWhiteSpace(command.Description))
 				d.Add(new("SL3003", $"Command '{command.Name}' needs a description."));
 			if (command.Inputs.Count(x => x.IsDefault) > 1)
@@ -313,6 +347,8 @@ public sealed partial class ShellEngine
 		foreach (var type in descriptors.Types)
 		{
 			type.SymbolId = NextSymbol(type);
+			if (type.Constructor is { } constructor)
+				constructor.ConstructedType = type.Id;
 			foreach (var member in type.Members)
 			{
 				member.ReceiverType = type.Id;
@@ -336,7 +372,8 @@ public sealed partial class ShellEngine
 				Queries = type.Queries,
 				ResolvedSymbols = resolvedSymbols[type.Id],
 				Equality = type.Equality,
-				Ordering = type.Ordering
+				Ordering = type.Ordering,
+				Constructor = type.Constructor
 			});
 			Types.Add(type);
 			RefreshConstructedTypeNames(type.Id, type.Name);

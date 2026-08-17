@@ -107,6 +107,10 @@ internal sealed class TypeEntry
 	{
 		get; init;
 	}
+	public ConstructorDescriptor? Constructor
+	{
+		get; init;
+	}
 	public ShellTypeId? ElementType
 	{
 		get; init;

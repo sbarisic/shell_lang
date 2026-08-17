@@ -91,10 +91,12 @@ internal sealed partial class Evaluator
 				BoundErrorExpression => EvalOutcome.Host(new HostFault("SL5008", "An invalid bound node reached execution.", expression.Span)),
 				BoundLiteralExpression literal => EvalOutcome.Success(literal.Value),
 				BoundNameExpression name => EvaluateName(name, path),
+				BoundContextExpression context => EvaluateContext(context),
 				BoundArrayExpression array => EvaluateArray(array, path),
 				BoundUnaryExpression unary => EvaluateUnary(unary, path),
 				BoundBinaryExpression binary => EvaluateBinary(binary, path),
 				BoundApplyExpression apply => EvaluateApply(apply, path),
+				BoundConstructorExpression constructor => EvaluateConstructor(constructor, path),
 				_ => EvalOutcome.Host(new HostFault("SL5008", "Unknown bound expression.", expression.Span))
 			};
 		}
@@ -106,10 +108,6 @@ internal sealed partial class Evaluator
 
 	private EvalOutcome EvaluateName(BoundNameExpression expression, IReadOnlyList<int> path)
 	{
-		if (expression.Name == ".")
-			return _contextValue is null
-			? EvalOutcome.Host(new HostFault("SL5010", "No contextual element is active.", expression.Span))
-			: EvalOutcome.Success(_contextValue);
 		if (!expression.IsGlobal)
 			return _session.TryGetBinding(expression.Name, out var sessionValue)
 				? EvalOutcome.Success(sessionValue)

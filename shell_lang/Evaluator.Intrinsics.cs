@@ -354,7 +354,8 @@ internal sealed partial class Evaluator
 	private EvalOutcome? EvaluateContextValue(BoundIntrinsicOperation operation, int index, IReadOnlyList<int> path,
 		out ShellValue value)
 	{
-		var evaluated = Evaluate(operation.ContextExpression!, Append(path, index));
+		var evaluated = WithContext(operation.ContextScopeId!.Value, _contextValue!,
+			() => Evaluate(operation.ContextExpression!, Append(path, index)));
 		if (evaluated.Failed)
 		{
 			value = null!;

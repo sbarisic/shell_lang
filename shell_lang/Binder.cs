@@ -10,7 +10,6 @@ internal sealed partial class Binder
 	private readonly List<CompilationDiagnostic> _diagnostics;
 	private readonly Dictionary<string, (ShellTypeId Type, bool External)> _locals = new(StringComparer.Ordinal);
 	private readonly Dictionary<string, SessionRequirement> _requirements = new(StringComparer.Ordinal);
-	private ShellTypeId? _contextType;
 
 	public Binder(ShellEngine engine, ShellSession session, string source, List<CompilationDiagnostic> diagnostics)
 	{
@@ -54,6 +53,7 @@ internal sealed partial class Binder
 		{
 			LiteralSyntax literal => BindLiteral(literal, expected),
 			NameSyntax name => BindName(name, expected),
+			ThisSyntax @this => BindThis(@this),
 			ArraySyntax array => BindArray(array, expected),
 			UnarySyntax unary => BindUnary(unary),
 			BinarySyntax binary => BindBinary(binary),
@@ -307,6 +307,8 @@ internal sealed partial class Binder
 
 	private BoundExpression BindStageName(NameSyntax syntax, BoundExpression primary)
 	{
+		if (_engine.TryGetType(syntax.Name, out _))
+			return ErrorExpression("SL2502", $"Type constructor '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
 		if (ShellEngine.IntrinsicNames.Contains(syntax.Name))
 			return BindIntrinsic(syntax.Name, [], primary, syntax.Span);
 		if (!_engine.Commands.TryGetValue(syntax.Name, out var command))
@@ -316,6 +318,12 @@ internal sealed partial class Binder
 
 	private BoundExpression BindInvocation(InvocationSyntax syntax, BoundExpression? primary)
 	{
+		if (_engine.TryGetType(syntax.Name, out var type))
+		{
+			if (primary is not null)
+				return ErrorExpression("SL2502", $"Type constructor '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
+			return BindConstructor(type, syntax);
+		}
 		if (ShellEngine.IntrinsicNames.Contains(syntax.Name))
 			return BindIntrinsic(syntax.Name, syntax.Entries, primary, syntax.Span);
 		if (!_engine.Commands.TryGetValue(syntax.Name, out var command))
@@ -329,6 +337,13 @@ internal sealed partial class Binder
 		var defaultInput = command.Inputs.FirstOrDefault(x => x.IsDefault);
 		if (primary is not null && defaultInput is null)
 			return ErrorExpression("SL2203", $"Command '{command.Name}' has no default input.", span);
+		var directOutput = CommandReturnType(command);
+		var preliminaryPlan = primary is null ? null :
+			BuildAdaptation(primary.Type, defaultInput!.Type, true, span, directOutput);
+		var operationScope = preliminaryPlan is null ? null : CreateContext(EffectiveContextType(preliminaryPlan));
+		var enclosingScope = _contextScope;
+		if (operationScope is not null)
+			_contextScope = operationScope;
 		var suppliedInputs = new HashSet<string>(StringComparer.Ordinal);
 		var suppliedArgs = new HashSet<string>(StringComparer.Ordinal);
 		var secondaries = new List<BoundSecondary>();
@@ -352,7 +367,9 @@ internal sealed partial class Binder
 				}
 				if (primary is not null && port.IsDefault)
 					Error("SL2206", "The default input is supplied by both the pipeline and an explicit port.", entry.Span);
-				var expression = BindExpression(entry.Expression, port.Type);
+				var expression = operationScope is null
+					? BindExpression(entry.Expression, port.Type)
+					: InContext(operationScope, () => BindExpression(entry.Expression, port.Type));
 				var adaptation = BuildAdaptation(expression.Type, port.Type, false, entry.Span);
 				secondaries.Add(new(port.Name, true, expression, adaptation, entry.Span));
 			}
@@ -377,7 +394,9 @@ internal sealed partial class Binder
 					Error("SL2209", $"Argument '{argument.Name}' is supplied more than once.", entry.Span);
 					continue;
 				}
-				var expression = BindExpression(entry.Expression, argument.Type);
+				var expression = operationScope is null
+					? BindExpression(entry.Expression, argument.Type)
+					: InContext(operationScope, () => BindExpression(entry.Expression, argument.Type));
 				var adaptation = BuildAdaptation(expression.Type, argument.Type, false, entry.Span);
 				secondaries.Add(new(argument.Name, false, expression, adaptation, entry.Span));
 			}
@@ -389,7 +408,6 @@ internal sealed partial class Binder
 			if (arg.Required && !suppliedArgs.Contains(arg.Name))
 				Error("SL2211", $"Required argument '{command.Name}.{arg.Name}' is missing.", span);
 
-		var directOutput = CommandReturnType(command);
 		if (primary is null)
 		{
 			if (defaultInput is not null && !suppliedInputs.Contains(defaultInput.Name))
@@ -399,9 +417,15 @@ internal sealed partial class Binder
 			var invocationType = CombineSecondaryResults(directOutput, secondaries);
 			return new BoundApplyExpression(dummy, op, new(AdaptationKind.Direct, _engine.Core.Bool, directOutput), secondaries, invocationType, span);
 		}
+		secondaries = MarkContextual(secondaries, operationScope!).ToList();
 		var operation = new BoundCommandOperation(command, defaultInput!.Name, defaultInput.Type, directOutput, span);
-		var plan = BuildAdaptation(primary.Type, operation.ExpectedInput, true, span, directOutput);
-		return new BoundApplyExpression(primary, operation, plan, secondaries, CombineSecondaryResults(plan.OutputType, secondaries), span);
+		var contextualOutput = CombineContextualDirectOutput(directOutput, secondaries, operationScope!.Id);
+		var plan = BuildAdaptation(primary.Type, operation.ExpectedInput, true, span, contextualOutput);
+		var ordinary = secondaries.Where(x => x.ContextScopeId != operationScope.Id).ToArray();
+		var result = new BoundApplyExpression(primary, operation, plan, secondaries,
+			CombineSecondaryResults(plan.OutputType, ordinary), span);
+		_contextScope = enclosingScope;
+		return result;
 	}
 
 	private ShellTypeId CommandReturnType(CommandDescriptor command)
@@ -452,15 +476,24 @@ internal sealed partial class Binder
 		{
 			if (arguments is null)
 				Error("SL2306", $"Query '{name}' requires invocation syntax.", span);
-			secondaries = BindQueryArguments(query!, arguments ?? [], span);
 			var direct = query!.ErrorType is { } error ? _engine.ResultOf(query.OutputType, error) : query.OutputType;
 			operation = new BoundQueryOperation(query, expectedReceiver, direct, span);
+			var preliminary = BuildAdaptation(receiver.Type, expectedReceiver, true, span, direct);
+			var scope = CreateContext(EffectiveContextType(preliminary));
+			secondaries = MarkContextual(InContext(scope,
+				() => BindQueryArguments(query, arguments ?? [], span, scope)), scope);
+			var contextualOutput = CombineContextualDirectOutput(direct, secondaries, scope.Id);
+			var queryPlan = BuildAdaptation(receiver.Type, expectedReceiver, true, span, contextualOutput);
+			var ordinary = secondaries.Where(x => x.ContextScopeId != scope.Id).ToArray();
+			return new BoundApplyExpression(receiver, operation, queryPlan, secondaries,
+				CombineSecondaryResults(queryPlan.OutputType, ordinary), span);
 		}
 		var plan = BuildAdaptation(receiver.Type, operation.ExpectedInput, true, span, operation.DirectOutput);
 		return new BoundApplyExpression(receiver, operation, plan, secondaries, CombineSecondaryResults(plan.OutputType, secondaries), span);
 	}
 
-	private IReadOnlyList<BoundSecondary> BindQueryArguments(QueryDescriptor query, IReadOnlyList<InvocationEntrySyntax> entries, SourceSpan span)
+	private IReadOnlyList<BoundSecondary> BindQueryArguments(QueryDescriptor query,
+		IReadOnlyList<InvocationEntrySyntax> entries, SourceSpan span, ContextScope scope)
 	{
 		var result = new List<BoundSecondary>();
 		var supplied = new HashSet<string>(StringComparer.Ordinal);
@@ -490,7 +523,7 @@ internal sealed partial class Binder
 				Error("SL2209", $"Argument '{argument.Name}' is supplied more than once.", entry.Span);
 				continue;
 			}
-			var expression = BindExpression(entry.Expression, argument.Type);
+			var expression = InContext(scope, () => BindExpression(entry.Expression, argument.Type));
 			result.Add(new(argument.Name, false, expression, BuildAdaptation(expression.Type, argument.Type, false, entry.Span), entry.Span));
 		}
 		foreach (var argument in query.Arguments)
@@ -501,9 +534,9 @@ internal sealed partial class Binder
 
 	private BoundExpression BindContextMember(ContextMemberSyntax syntax)
 	{
-		if (_contextType is null)
-			return ErrorExpression("SL2308", "Leading '.' is valid only inside a contextual collection intrinsic.", syntax.Span);
-		var receiver = new BoundNameExpression(".", false, _contextType.Value, syntax.Span);
+		if (_contextScope is null)
+			return ErrorExpression("SL2308", "Leading '.' is unavailable outside a contextual expression.", syntax.Span);
+		var receiver = new BoundContextExpression(_contextScope.Id, _contextScope.Type, syntax.Span);
 		return BindMemberOn(receiver, syntax.Name, syntax.Arguments, syntax.Span);
 	}
 
@@ -550,5 +583,6 @@ internal sealed partial class Binder
 		return new BoundErrorExpression(_engine.Core.Int32, span);
 	}
 	private void Error(string code, string message, SourceSpan span, ShellTypeId? expected = null, ShellTypeId? actual = null, IReadOnlyList<string>? attempts = null) =>
-		_diagnostics.Add(new CompilationDiagnostic(code, message, span, expected, actual, attempts));
+		_diagnostics.Add(new CompilationDiagnostic(code, message, span, expected, actual, attempts,
+			contextType: _contextScope?.Type));
 }

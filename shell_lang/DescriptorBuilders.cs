@@ -14,6 +14,7 @@ public sealed class TypeDescriptorBuilder<T> where T : notnull
 	private readonly List<QueryDescriptor> _queries = [];
 	private EqualityDescriptor? _equality;
 	private OrderingDescriptor? _ordering;
+	private ConstructorDescriptor? _constructor;
 	internal TypeDescriptorBuilder(string name) => _name = name;
 	public TypeDescriptorBuilder<T> Description(string value)
 	{
@@ -55,7 +56,28 @@ public sealed class TypeDescriptorBuilder<T> where T : notnull
 		_ordering = new OrderingDescriptor((a, b) => compare((T)a, (T)b));
 		return this;
 	}
-	public TypeDescriptor Build() => new(_name, _description, typeof(T), new ValueAdapter<T>(), _bases, _members, _queries, _equality, _ordering);
+	public TypeDescriptorBuilder<T> Constructor(IEnumerable<ArgumentDescriptor>? arguments,
+		Func<InvocationContext, InvocationValues, T> invoke)
+	{
+		ArgumentNullException.ThrowIfNull(invoke);
+		_constructor = new ConstructorDescriptor(arguments, (context, values) =>
+			new ConstructorOutcome.Success(context.Engine.CreateValue(_constructor!.ConstructedType, invoke(context, values))));
+		return this;
+	}
+	public TypeDescriptorBuilder<T> FallibleConstructor(IEnumerable<ArgumentDescriptor>? arguments,
+		ShellTypeId errorType, Func<InvocationContext, InvocationValues, ConstructorOutcome<T>> invoke)
+	{
+		ArgumentNullException.ThrowIfNull(invoke);
+		_constructor = new ConstructorDescriptor(arguments, (context, values) => invoke(context, values) switch
+		{
+			ConstructorOutcome<T>.Success success => new ConstructorOutcome.Success(
+				context.Engine.CreateValue(_constructor!.ConstructedType, success.Value)),
+			ConstructorOutcome<T>.Error error => new ConstructorOutcome.Error(error.Value),
+			_ => throw new InvalidOperationException("Constructor returned an unknown outcome.")
+		}, errorType);
+		return this;
+	}
+	public TypeDescriptor Build() => new(_name, _description, typeof(T), new ValueAdapter<T>(), _bases, _members, _queries, _equality, _ordering, _constructor);
 }
 
 public static class CommandDescriptorBuilder

@@ -14,9 +14,11 @@ internal sealed partial class Evaluator
 
 		if (expression.Operation is BoundPrimitiveOperation { Operator: TokenKind.AndAnd or TokenKind.OrOr } logical &&
 			!ContainsArray(expression.Adaptation) && TryDirectValue(expression.Adaptation, primary.Value, out var direct) &&
-			direct!.Value is bool boolean && ((logical.Operator == TokenKind.AndAnd && !boolean) || (logical.Operator == TokenKind.OrOr && boolean)))
+			direct!.Value is bool boolean && ((logical.Operator == TokenKind.AndAnd && !boolean) ||
+			(logical.Operator == TokenKind.OrOr && boolean)))
 		{
-			var shortCircuit = ApplyPlan(expression.Adaptation, primary.Value, logical, new Dictionary<string, ShellValue>(), new Dictionary<string, ShellValue>(), path);
+			var shortCircuit = ApplyPlan(expression.Adaptation, primary.Value, logical,
+				new Dictionary<string, ShellValue>(), new Dictionary<string, ShellValue>(), path, []);
 			if (shortCircuit.Failed || expression.Type == expression.Adaptation.OutputType)
 				return shortCircuit;
 			var shortEntry = _engine.GetTypeEntry(expression.Adaptation.OutputType);
@@ -27,32 +29,16 @@ internal sealed partial class Evaluator
 
 		var inputs = new Dictionary<string, ShellValue>(StringComparer.Ordinal);
 		var arguments = new Dictionary<string, ShellValue>(StringComparer.Ordinal);
-		foreach (var secondary in expression.Secondary)
+		foreach (var secondary in expression.Secondary.Where(x => x.ContextScopeId is null))
 		{
-			var evaluated = Evaluate(secondary.Expression, path);
-			if (evaluated.Failed)
-				return evaluated;
-			if (evaluated.Value is null)
-				return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
-			var adapted = AdaptSecondary(evaluated.Value, secondary.Adaptation, secondary.Span);
-			if (adapted.Failed)
-				return adapted;
-			if (adapted.Value is null)
-				return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
-			var adaptedEntry = _engine.GetTypeEntry(adapted.Value.Type);
-			if (adaptedEntry.Kind == ShellTypeKind.Result && adapted.Value.Value is ShellResultValue.Error)
-				return EvalOutcome.Success(RetypeResult(adapted.Value, expression.Type));
-			(secondary.IsInput ? inputs : arguments).Add(secondary.Name, adapted.Value);
+			var secondaryOutcome = EvaluateSecondary(secondary, inputs, arguments, path);
+			if (secondaryOutcome is not null)
+				return NormalizeSecondaryFailure(secondaryOutcome, expression.Type);
 		}
-		if (expression.Operation is BoundCommandOperation command)
-			foreach (var argument in command.Command.Arguments)
-				if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null)
-					arguments.Add(argument.Name, argument.DefaultValue);
-		if (expression.Operation is BoundQueryOperation query)
-			foreach (var argument in query.Query.Arguments)
-				if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null)
-					arguments.Add(argument.Name, argument.DefaultValue);
-		var applied = ApplyPlan(expression.Adaptation, primary.Value, expression.Operation, inputs, arguments, path);
+		AddDefaults(expression.Operation, arguments);
+		var contextual = expression.Secondary.Where(x => x.ContextScopeId is not null).ToArray();
+		var applied = ApplyPlan(expression.Adaptation, primary.Value, expression.Operation,
+			inputs, arguments, path, contextual);
 		if (applied.Failed || expression.Type == expression.Adaptation.OutputType)
 			return applied;
 		var baseEntry = _engine.GetTypeEntry(expression.Adaptation.OutputType);
@@ -63,28 +49,63 @@ internal sealed partial class Evaluator
 			: new ShellValue(expression.Type, new ShellResultValue.Success(applied.Value!)));
 	}
 
+	private EvalOutcome? EvaluateSecondary(BoundSecondary secondary, IDictionary<string, ShellValue> inputs,
+		IDictionary<string, ShellValue> arguments, IReadOnlyList<int> path)
+	{
+		var evaluated = Evaluate(secondary.Expression, path);
+		if (evaluated.Failed)
+			return evaluated;
+		if (evaluated.Value is null)
+			return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
+		var adapted = AdaptSecondary(evaluated.Value, secondary.Adaptation, secondary.Span);
+		if (adapted.Failed)
+			return adapted;
+		if (adapted.Value is null)
+			return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
+		var adaptedEntry = _engine.GetTypeEntry(adapted.Value.Type);
+		if (adaptedEntry.Kind == ShellTypeKind.Result && adapted.Value.Value is ShellResultValue.Error)
+			return adapted;
+		(secondary.IsInput ? inputs : arguments).Add(secondary.Name, adapted.Value);
+		return null;
+	}
+
+	private EvalOutcome NormalizeSecondaryFailure(EvalOutcome outcome, ShellTypeId outputType) =>
+		outcome.Value is not null && _engine.GetTypeEntry(outcome.Value.Type).Kind == ShellTypeKind.Result &&
+		outcome.Value.Value is ShellResultValue.Error
+			? EvalOutcome.Success(RetypeResult(outcome.Value, outputType))
+			: outcome;
+
+	private static void AddDefaults(BoundOperation operation, IDictionary<string, ShellValue> arguments)
+	{
+		IEnumerable<ArgumentDescriptor> defaults = operation switch
+		{
+			BoundCommandOperation command => command.Command.Arguments,
+			BoundQueryOperation query => query.Query.Arguments,
+			_ => []
+		};
+		foreach (var argument in defaults)
+			if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null)
+				arguments.Add(argument.Name, argument.DefaultValue);
+	}
+
 	private bool HasBlockingOuterError(AdaptationPlan plan, ShellValue value, out ShellValue? error)
 	{
 		error = null;
 		if (plan.Kind == AdaptationKind.Array || plan.Kind == AdaptationKind.Direct)
 			return false;
 		if (plan.Kind == AdaptationKind.DefaultOutput)
-		{
-			var record = (ShellOutputRecordValue)value.Value;
-			return HasBlockingOuterError(plan.Inner!, record.Fields[plan.OutputField!], out error);
-		}
+			return HasBlockingOuterError(plan.Inner!, ((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!], out error);
 		var result = (ShellResultValue)value.Value;
 		if (result is ShellResultValue.Error)
 		{
 			error = value;
 			return true;
 		}
-		if (result is ShellResultValue.Success success)
-			return HasBlockingOuterError(plan.Inner!, success.Value, out error);
-		return false;
+		return result is ShellResultValue.Success success && HasBlockingOuterError(plan.Inner!, success.Value, out error);
 	}
 
-	private static bool ContainsArray(AdaptationPlan plan) => plan.Kind == AdaptationKind.Array || (plan.Inner is not null && ContainsArray(plan.Inner));
+	private static bool ContainsArray(AdaptationPlan plan) =>
+		plan.Kind == AdaptationKind.Array || plan.Inner is not null && ContainsArray(plan.Inner);
 
 	private bool TryDirectValue(AdaptationPlan plan, ShellValue value, out ShellValue? direct)
 	{
@@ -122,14 +143,16 @@ internal sealed partial class Evaluator
 	}
 
 	private EvalOutcome ApplyPlan(AdaptationPlan plan, ShellValue value, BoundOperation operation,
-		IReadOnlyDictionary<string, ShellValue> inputs, IReadOnlyDictionary<string, ShellValue> arguments, IReadOnlyList<int> path)
+		IReadOnlyDictionary<string, ShellValue> inputs, IReadOnlyDictionary<string, ShellValue> arguments,
+		IReadOnlyList<int> path, IReadOnlyList<BoundSecondary> contextual)
 	{
 		switch (plan.Kind)
 		{
 			case AdaptationKind.Direct:
-				return InvokeOperation(operation, value, inputs, arguments, path);
+				return InvokeDirect(plan, value, operation, inputs, arguments, path, contextual);
 			case AdaptationKind.DefaultOutput:
-				return ApplyPlan(plan.Inner!, ((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!], operation, inputs, arguments, path);
+				return ApplyPlan(plan.Inner!, ((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!],
+					operation, inputs, arguments, path, contextual);
 			case AdaptationKind.Result:
 				{
 					var result = (ShellResultValue)value.Value;
@@ -137,31 +160,70 @@ internal sealed partial class Evaluator
 						return EvalOutcome.Success(RetypeResult(value, plan.OutputType));
 					if (result is ShellResultValue.VoidSuccess)
 						return EvalOutcome.Host(new HostFault("SL5015", "VoidSuccess cannot feed an operation.", operation.Span));
-					var inner = ApplyPlan(plan.Inner!, ((ShellResultValue.Success)result).Value, operation, inputs, arguments, path);
+					var inner = ApplyPlan(plan.Inner!, ((ShellResultValue.Success)result).Value,
+						operation, inputs, arguments, path, contextual);
 					if (inner.Failed)
 						return inner;
 					return EvalOutcome.Success(WrapPropagated(inner.Value, plan.Inner!.OutputType, plan.OutputType));
 				}
 			case AdaptationKind.Array:
-				return ApplyArray(plan, value, operation, inputs, arguments, path);
+				return ApplyArray(plan, value, operation, inputs, arguments, path, contextual);
 			default:
 				throw new InvalidOperationException();
 		}
 	}
 
+	private EvalOutcome InvokeDirect(AdaptationPlan plan, ShellValue primary, BoundOperation operation,
+		IReadOnlyDictionary<string, ShellValue> suppliedInputs,
+		IReadOnlyDictionary<string, ShellValue> suppliedArguments, IReadOnlyList<int> path,
+		IReadOnlyList<BoundSecondary> contextual)
+	{
+		EvalOutcome Invoke()
+		{
+			var inputs = new Dictionary<string, ShellValue>(suppliedInputs, StringComparer.Ordinal);
+			var arguments = new Dictionary<string, ShellValue>(suppliedArguments, StringComparer.Ordinal);
+			foreach (var secondary in contextual)
+			{
+				var secondaryOutcome = EvaluateSecondary(secondary, inputs, arguments, path);
+				if (secondaryOutcome is not null)
+				{
+					if (secondaryOutcome.RuntimeFault is { Context.Count: 0 } runtime &&
+						operation is BoundCommandOperation)
+						return EvalOutcome.Runtime(new RuntimeFault(runtime.Code, runtime.Message, runtime.Source,
+							path.Select(index => new ErrorContextFrame("array", index.ToString(), runtime.Source, index)).ToArray()));
+					return NormalizeSecondaryFailure(secondaryOutcome, plan.OutputType);
+				}
+			}
+			AddDefaults(operation, arguments);
+			var outcome = InvokeOperation(operation, primary, inputs, arguments, path);
+			if (outcome.Failed || plan.OutputType == operation.DirectOutput)
+				return outcome;
+			if (_engine.GetTypeEntry(operation.DirectOutput).Kind == ShellTypeKind.Result)
+				return EvalOutcome.Success(RetypeResult(outcome.Value!, plan.OutputType));
+			return EvalOutcome.Success(operation.DirectOutput == _engine.Core.Void
+				? new ShellValue(plan.OutputType, new ShellResultValue.VoidSuccess())
+				: new ShellValue(plan.OutputType, new ShellResultValue.Success(outcome.Value!)));
+		}
+
+		return contextual.FirstOrDefault()?.ContextScopeId is { } scopeId
+			? WithContext(scopeId, primary, Invoke)
+			: Invoke();
+	}
+
 	private EvalOutcome ApplyArray(AdaptationPlan plan, ShellValue value, BoundOperation operation,
-		IReadOnlyDictionary<string, ShellValue> inputs, IReadOnlyDictionary<string, ShellValue> arguments, IReadOnlyList<int> path)
+		IReadOnlyDictionary<string, ShellValue> inputs, IReadOnlyDictionary<string, ShellValue> arguments,
+		IReadOnlyList<int> path, IReadOnlyList<BoundSecondary> contextual)
 	{
 		var array = (ShellArrayValue)value.Value;
 		var collected = new List<ShellValue>();
 		for (var i = 0; i < array.Items.Count; i++)
 		{
 			var childPath = Append(path, i);
-			var outcome = ApplyPlan(plan.Inner!, array.Items[i], operation, inputs, arguments, childPath);
-			if (outcome.RuntimeFault is { } rf)
-				return EvalOutcome.Runtime(operation is BoundCommandOperation ? rf : AddIndex(rf, i));
-			if (outcome.HostFault is { } hf)
-				return EvalOutcome.Host(AddIndex(hf, i));
+			var outcome = ApplyPlan(plan.Inner!, array.Items[i], operation, inputs, arguments, childPath, contextual);
+			if (outcome.RuntimeFault is { } runtime)
+				return EvalOutcome.Runtime(operation is BoundCommandOperation ? runtime : AddIndex(runtime, i));
+			if (outcome.HostFault is { } host)
+				return EvalOutcome.Host(AddIndex(host, i));
 			if (plan.Inner!.OutputType == _engine.Core.Void)
 				continue;
 			var innerEntry = _engine.GetTypeEntry(plan.Inner.OutputType);
@@ -170,7 +232,8 @@ internal sealed partial class Evaluator
 				var result = (ShellResultValue)outcome.Value!.Value;
 				if (result is ShellResultValue.Error error)
 				{
-					var frames = new[] { new ErrorContextFrame("array", i.ToString(), operation.Span, i) }.Concat(error.Frames).ToArray();
+					var frames = new[] { new ErrorContextFrame("array", i.ToString(), operation.Span, i) }
+						.Concat(error.Frames).ToArray();
 					return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.Error(error.Value, frames)));
 				}
 				if (result is ShellResultValue.Success success)
@@ -187,7 +250,8 @@ internal sealed partial class Evaluator
 			if (outputEntry.SuccessType == _engine.Core.Void)
 				return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.VoidSuccess()));
 			var arrayType = outputEntry.SuccessType!.Value;
-			return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.Success(new ShellValue(arrayType, new ShellArrayValue(collected)))));
+			return EvalOutcome.Success(new ShellValue(plan.OutputType,
+				new ShellResultValue.Success(new ShellValue(arrayType, new ShellArrayValue(collected)))));
 		}
 		return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellArrayValue(collected)));
 	}

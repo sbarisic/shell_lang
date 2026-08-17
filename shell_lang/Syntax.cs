@@ -5,7 +5,7 @@ namespace ShellLang;
 
 internal enum TokenKind
 {
-	End, Bad, NewLine, Semicolon, Identifier, Integer, Fractional, String, True, False,
+	End, Bad, NewLine, Semicolon, Identifier, Integer, Fractional, String, True, False, This,
 	OpenParen, CloseParen, OpenBracket, CloseBracket, Comma, Dot, Colon,
 	Assign, Arrow, InputArrow, Plus, Minus, Star, Slash, Percent, Bang,
 	EqualEqual, BangEqual, Less, LessEqual, Greater, GreaterEqual, AndAnd, OrOr
@@ -61,6 +61,7 @@ internal sealed class Lexer
 				{
 					"true" => TokenKind.True,
 					"false" => TokenKind.False,
+					"this" => TokenKind.This,
 					_ => TokenKind.Identifier
 				},
 					text, text is "true" ? true : text is "false" ? false : null, Span(start, _position)));
@@ -245,6 +246,7 @@ internal sealed record ExpressionStatementSyntax(ExpressionSyntax Expression, So
 internal abstract record ExpressionSyntax(SourceSpan Span) : SyntaxNode(Span);
 internal sealed record LiteralSyntax(Token Token) : ExpressionSyntax(Token.Span);
 internal sealed record NameSyntax(string Name, SourceSpan Span) : ExpressionSyntax(Span);
+internal sealed record ThisSyntax(SourceSpan Span) : ExpressionSyntax(Span);
 internal sealed record ArraySyntax(IReadOnlyList<ExpressionSyntax> Items, SourceSpan Span) : ExpressionSyntax(Span);
 internal sealed record UnarySyntax(TokenKind Operator, ExpressionSyntax Operand, SourceSpan Span) : ExpressionSyntax(Span);
 internal sealed record BinarySyntax(ExpressionSyntax Left, TokenKind Operator, ExpressionSyntax Right, SourceSpan Span) : ExpressionSyntax(Span);
@@ -406,6 +408,11 @@ internal sealed class Parser
 		}
 		if (token.Kind == TokenKind.Identifier)
 			return Peek(1).Kind == TokenKind.OpenParen ? ParseInvocation() : new NameSyntax(Next().Text, token.Span);
+		if (token.Kind == TokenKind.This)
+		{
+			Next();
+			return new ThisSyntax(token.Span);
+		}
 		if (token.Kind == TokenKind.OpenParen)
 		{
 			var open = Next();

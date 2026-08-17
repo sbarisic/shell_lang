@@ -151,6 +151,8 @@ internal static class InteractiveConsole
 		PrintParameters("Inputs", help.Inputs);
 		PrintParameters("Arguments", help.Arguments);
 		PrintParameters("Outputs", help.Outputs);
+		if (help.ContextType is { } contextType)
+			Console.WriteLine($"Context: {engine.Catalog.GetTypeName(contextType)}");
 		if (help.ErrorType is { } errorType)
 			Console.WriteLine($"Error: {engine.Catalog.GetTypeName(errorType)}");
 		if (help.RuntimeFaults.Count > 0)

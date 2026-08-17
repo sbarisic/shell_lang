@@ -90,7 +90,7 @@ public sealed class TypeDescriptor
 	public TypeDescriptor(string name, string description, Type clrType, ValueAdapter adapter,
 		IEnumerable<ShellTypeId>? directBases = null, IEnumerable<MemberDescriptor>? members = null,
 		IEnumerable<QueryDescriptor>? queries = null, EqualityDescriptor? equality = null,
-		OrderingDescriptor? ordering = null)
+		OrderingDescriptor? ordering = null, ConstructorDescriptor? constructor = null)
 	{
 		Id = IdentitySource.NextType();
 		Name = name;
@@ -103,6 +103,7 @@ public sealed class TypeDescriptor
 		Queries = Array.AsReadOnly((queries ?? []).ToArray());
 		Equality = equality;
 		Ordering = ordering;
+		Constructor = constructor;
 	}
 	public ShellTypeId Id
 	{
@@ -145,6 +146,10 @@ public sealed class TypeDescriptor
 		get;
 	}
 	public OrderingDescriptor? Ordering
+	{
+		get;
+	}
+	public ConstructorDescriptor? Constructor
 	{
 		get;
 	}

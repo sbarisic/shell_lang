@@ -137,6 +137,18 @@ public sealed partial class ShellEngine
 			if (contextCompilation.IsValid)
 				pipelineType = contextCompilation.ResultType;
 		}
+		var expressionPosition = position > 0 && source.LastIndexOf('(', position - 1) >= 0;
+		if (pipelineType is null || expressionPosition)
+			foreach (var type in Types.Where(x => x.Constructor is not null))
+				Add(type.Name, CompletionItemKind.Type, DescribeConstructor(type), type.Description);
+		var completionContext = FindCompletionContextType(source, position, session, arrow, pipelineType);
+		if (completionContext is { } contextType)
+		{
+			Add("this", CompletionItemKind.Context, TypeName(contextType), "Effective contextual input.");
+			if (start > 0 && source[start - 1] == '.')
+				foreach (var candidate in MemberCompletions(contextType))
+					Add(candidate.Name, CompletionItemKind.Member, TypeName(candidate.Type), candidate.Description);
+		}
 		foreach (var command in Commands.Values)
 		{
 			var primary = command.Inputs.FirstOrDefault(x => x.IsDefault);
@@ -188,7 +200,9 @@ public sealed partial class ShellEngine
 				receiverStart--;
 			var receiverName = source[receiverStart..receiverEnd];
 			ShellTypeId? receiverType = null;
-			if (session.TryGetBinding(receiverName, out var value))
+			if (receiverName == "this" && completionContext is not null)
+				receiverType = completionContext;
+			else if (session.TryGetBinding(receiverName, out var value))
 				receiverType = value.Type;
 			else if (Globals.TryGetValue(receiverName, out var global))
 				receiverType = global.Type;
@@ -240,14 +254,19 @@ public sealed partial class ShellEngine
 				c.Inputs.Select(x => new HelpParameter(x.Name, x.Type, x.Description, IsDefault: x.IsDefault)).ToArray(),
 				c.Arguments.Select(x => new HelpParameter(x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
 				c.Outputs.Select(x => new HelpParameter(x.Name, x.Type, x.Description, IsDefault: x.IsDefault)).ToArray(), c.ErrorType,
-				c.RuntimeFaults.Select(x => RuntimeFaults[x.Value]).ToArray()),
+				c.RuntimeFaults.Select(x => RuntimeFaults[x.Value]).ToArray(),
+				contextType: c.Inputs.FirstOrDefault(x => x.IsDefault)?.Type),
 			GlobalDescriptor g => new HelpItem(g.Id, g.Name, "global", g.Description, outputs: [new("value", g.Type, g.Description)]),
 			MemberDescriptor m => new HelpItem(m.Id, m.Name, "member", m.Description, inputs: [new("receiver", m.ReceiverType, "Receiver.")], outputs: [new("value", m.ValueType, m.Description)]),
 			QueryDescriptor q => new HelpItem(q.Id, q.Name, "query", q.Description, inputs: [new("receiver", q.ReceiverType, "Receiver.")],
 				arguments: q.Arguments.Select(x => new HelpParameter(x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
-				outputs: [new("value", q.OutputType, q.Description)], errorType: q.ErrorType),
+				outputs: [new("value", q.OutputType, q.Description)], errorType: q.ErrorType, contextType: q.ReceiverType),
 			IntrinsicDescriptor i => new HelpItem(i.Id, i.Name, "intrinsic", i.Description),
 			TypeDescriptor t => new HelpItem(t.SymbolId, t.Name, "type", t.Description,
+				arguments: t.Constructor?.Arguments.Select(x => new HelpParameter(
+					x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
+				outputs: t.Constructor is null ? null : [new("value", t.Id, t.Description)],
+				errorType: t.Constructor?.ErrorType,
 				members: GetTypeEntry(t.Id).ResolvedSymbols.Select(x => x.Name).ToArray()),
 			EnumTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "enum", e.Description, members: e.Members.Select(x => x.Name).ToArray()),
 			ErrorTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "error", e.Description),
@@ -265,6 +284,84 @@ public sealed partial class ShellEngine
 			_ => TypeName(command.OutputRecordType!.Value)
 		};
 		return command.ErrorType is { } e ? $"Result<{success},{TypeName(e)}>" : success;
+	}
+	private string DescribeConstructor(TypeDescriptor type)
+	{
+		var arguments = string.Join(", ", type.Constructor!.Arguments.OrderBy(x => x.Position)
+			.Select(x => $"{x.Name}: {TypeName(x.Type)}{(x.Required ? "" : " = default")}"));
+		var output = type.Constructor.ErrorType is { } error
+			? $"Result<{type.Name},{TypeName(error)}>" : type.Name;
+		return $"{type.Name}({arguments}) -> {output}";
+	}
+
+	private ShellTypeId? FindCompletionContextType(string source, int position, ShellSession session,
+		int arrow, ShellTypeId? pipelineType)
+	{
+		if (arrow >= 0 && pipelineType is { } actual)
+		{
+			var stageStart = arrow + 2;
+			while (stageStart < position && char.IsWhiteSpace(source[stageStart]))
+				stageStart++;
+			var stageEnd = stageStart;
+			while (stageEnd < position && (char.IsLetterOrDigit(source[stageEnd]) || source[stageEnd] == '_'))
+				stageEnd++;
+			var open = source.IndexOf('(', stageEnd, Math.Max(0, position - stageEnd));
+			if (open >= 0 && open < position)
+			{
+				var name = source[stageStart..stageEnd];
+				if (Commands.TryGetValue(name, out var command) &&
+					command.Inputs.FirstOrDefault(x => x.IsDefault) is { } input)
+					return EffectiveCompletionType(actual, input.Type, true);
+				if (name is "where" or "sort" or "any" or "all" or "select" or "distinct")
+				{
+					var collection = CompletionCollectionType(actual);
+					if (collection is { } array)
+						return GetTypeEntry(array).ElementType;
+				}
+			}
+		}
+
+		var openParen = position == 0 ? -1 : source.LastIndexOf('(', position - 1);
+		if (openParen < 0)
+			return null;
+		var queryEnd = openParen;
+		var queryStart = queryEnd;
+		while (queryStart > 0 && (char.IsLetterOrDigit(source[queryStart - 1]) || source[queryStart - 1] == '_'))
+			queryStart--;
+		if (queryStart == 0 || source[queryStart - 1] != '.')
+			return null;
+		var receiverSource = source[..(queryStart - 1)].Trim();
+		var receiver = Compile(receiverSource, session);
+		if (!receiver.IsValid || receiver.ResultType is not { } receiverType)
+			return null;
+		var query = AccessibleQueries(receiverType).FirstOrDefault(x => x.Name == source[queryStart..queryEnd]);
+		return query is null ? null : EffectiveCompletionType(receiverType, query.ReceiverType, true);
+	}
+
+	private ShellTypeId? CompletionCollectionType(ShellTypeId type)
+	{
+		var entry = GetTypeEntry(type);
+		if (entry.Kind == ShellTypeKind.Array)
+			return type;
+		if (entry.Kind == ShellTypeKind.Result)
+			return CompletionCollectionType(entry.SuccessType!.Value);
+		if (entry.Kind == ShellTypeKind.OutputRecord && entry.DefaultOutput is { } field)
+			return CompletionCollectionType(entry.OutputFields![field]);
+		return null;
+	}
+
+	private ShellTypeId? EffectiveCompletionType(ShellTypeId actual, ShellTypeId expected, bool allowArray)
+	{
+		if (IsAssignable(actual, expected))
+			return actual;
+		var entry = GetTypeEntry(actual);
+		if (entry.Kind == ShellTypeKind.Result)
+			return EffectiveCompletionType(entry.SuccessType!.Value, expected, allowArray);
+		if (entry.Kind == ShellTypeKind.OutputRecord && entry.DefaultOutput is { } field)
+			return EffectiveCompletionType(entry.OutputFields![field], expected, allowArray);
+		if (allowArray && entry.Kind == ShellTypeKind.Array)
+			return EffectiveCompletionType(entry.ElementType!.Value, expected, true);
+		return null;
 	}
 	private IEnumerable<MemberDescriptor> AccessibleMembers(ShellTypeId type) =>
 		GetTypeEntry(type).ResolvedSymbols.Where(x => x.Member is not null).Select(x => x.Member!);

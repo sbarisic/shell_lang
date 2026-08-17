@@ -7,6 +7,9 @@ internal sealed record Vec3(float X, float Y, float Z)
 {
     public override string ToString() => $"({X}, {Y}, {Z})";
 }
+internal sealed record Quaternion(float X, float Y, float Z, float W);
+internal sealed record Color(float R, float G, float B, float A);
+internal sealed record Transform(Vec3 Position, Quaternion Rotation, Vec3 Scale);
 internal sealed record GameMap(string Name, ulong Seed);
 internal sealed record GameWorld(string Name);
 internal sealed record GameRules(Difficulty Difficulty);
@@ -118,6 +121,8 @@ internal sealed class MockGame
     {
         _engine = engine;
         var core = engine.Core;
+        ArgumentDescriptor C(string name, ShellTypeId type, int position, ShellValue? defaultValue = null) =>
+            new(name, $"{name} constructor argument.", type, position, defaultValue is null, defaultValue);
         var enums = new List<EnumTypeDescriptor>
         {
             Enum<Difficulty>("Difficulty"), Enum<WorldTransitionReason>("WorldTransitionReason"), Enum<RespawnPolicy>("RespawnPolicy"),
@@ -132,7 +137,38 @@ internal sealed class MockGame
             Host<GameWorld>("GameWorld"),
             Host<GameRules>("GameRules", b => b.Member("difficulty", "Difficulty.", EnumId<Difficulty>("Difficulty"), x => x.Difficulty)),
             Host<EncounterDirector>("EncounterDirector"), Host<NavigationSystem>("NavigationSystem"),
-            Host<Vec3>("Vector3"),
+            Host<Vec3>("Vector3", b => b
+                .Member("x", "X component.", core.Float32, x => x.X)
+                .Member("y", "Y component.", core.Float32, x => x.Y)
+                .Member("z", "Z component.", core.Float32, x => x.Z)
+                .Constructor([C("x", core.Float32, 0), C("y", core.Float32, 1), C("z", core.Float32, 2)],
+                    (_, values) => new Vec3(values.GetArgument<float>("x"), values.GetArgument<float>("y"), values.GetArgument<float>("z")))),
+            Host<Quaternion>("Quaternion", b => b
+                .Member("w", "W component.", core.Float32, x => x.W)
+                .Constructor([
+                    C("x", core.Float32, 0, engine.CreateValue(core.Float32, 0F)),
+                    C("y", core.Float32, 1, engine.CreateValue(core.Float32, 0F)),
+                    C("z", core.Float32, 2, engine.CreateValue(core.Float32, 0F)),
+                    C("w", core.Float32, 3, engine.CreateValue(core.Float32, 1F))],
+                    (_, values) => new Quaternion(values.GetArgument<float>("x"), values.GetArgument<float>("y"),
+                        values.GetArgument<float>("z"), values.GetArgument<float>("w")))),
+            Host<Color>("Color", b => b
+                .Member("a", "Alpha component.", core.Float32, x => x.A)
+                .Constructor([
+                    C("r", core.Float32, 0), C("g", core.Float32, 1), C("b", core.Float32, 2),
+                    C("a", core.Float32, 3, engine.CreateValue(core.Float32, 1F))],
+                    (_, values) => new Color(values.GetArgument<float>("r"), values.GetArgument<float>("g"),
+                        values.GetArgument<float>("b"), values.GetArgument<float>("a")))),
+            Host<Transform>("Transform", b => b
+                .Member("position", "Transform position.", TypeId("Vector3"), x => x.Position)
+                .Member("rotation", "Transform rotation.", TypeId("Quaternion"), x => x.Rotation)
+                .Member("scale", "Transform scale.", TypeId("Vector3"), x => x.Scale)
+                .Constructor([
+                    C("position", TypeId("Vector3"), 0),
+                    C("rotation", TypeId("Quaternion"), 1),
+                    C("scale", TypeId("Vector3"), 2)],
+                    (_, values) => new Transform(values.GetArgument<Vec3>("position"),
+                        values.GetArgument<Quaternion>("rotation"), values.GetArgument<Vec3>("scale")))),
             Host<MapMarker>("MapMarker", b => b.Member("classname", "Editor classname.", core.String, x => x.Classname)
                 .Member("name", "Marker name.", core.String, x => x.Name).Member("position", "Marker position.", TypeId("Vector3"), x => x.Position)
                 .Member("spawn_order", "Spawn order.", core.Int32, x => x.SpawnOrder).Member("stable_id", "Stable id.", core.UInt64, x => x.StableId)),

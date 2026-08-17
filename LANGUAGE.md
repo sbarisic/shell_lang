@@ -71,7 +71,7 @@ players -> where(.health < 50) -> damage(amount: 10)
 
 An identifier starts with a Unicode letter or `_`. Later characters can also contain Unicode decimal digits.
 
-The names `true`, `false`, and `null` are reserved. `null` is not a valid ShellLang value in version 0.1.
+The names `true`, `false`, `this`, and `null` are reserved. `this` is the contextual value described in Section 10. `null` is not a valid ShellLang value in version 0.1.
 
 Hosts SHOULD use `snake_case` for commands, ports, arguments, globals, and members. Hosts SHOULD use `PascalCase` for types and enum members.
 
@@ -188,6 +188,7 @@ member_suffix       = ".", identifier, [ member_arguments ] ;
 
 primary_expression  = literal
                     | identifier
+                    | "this"
                     | invocation
                     | array_literal
                     | contextual_member
@@ -223,7 +224,7 @@ A pipeline stage can omit `()` only when the command or intrinsic has no supplie
 
 A command used without a pipeline source MUST use invocation syntax. A zero-input command therefore uses `command()`.
 
-The lexer supplies the `boolean_literal`, `integer_literal`, `fractional_literal`, and `string_literal` terminals described in Section 3. The parser permits `contextual_member` only in a contextual intrinsic expression. Section 12 defines this semantic restriction.
+The lexer supplies the `boolean_literal`, `integer_literal`, `fractional_literal`, and `string_literal` terminals described in Section 3. The binder permits `this` and `contextual_member` only where an effective contextual value exists. A leading `.member` is shorthand for `this.member`.
 
 ## 5. Names and assignments
 
@@ -237,7 +238,7 @@ The compiler resolves a bare value identifier in this order:
 
 A command name resolves only in an invocation or pipeline-stage position. Command values are not first-class values.
 
-A type name resolves only in a type context or as the left side of an explicit enum member.
+A type name resolves in a type context, as the left side of an explicit enum member, or as a constructor invocation. A type invocation resolves before command lookup. A constructible type name cannot collide with a command or intrinsic.
 
 ```text
 DamageType.Fire
@@ -673,9 +674,7 @@ The runtime evaluates a pipeline source once.
 
 If an outer propagated Result is already `Err`, the runtime skips the command. It also skips all explicit inputs and arguments for that command.
 
-Otherwise, the runtime evaluates explicit inputs and arguments once in source order. It evaluates them before direct invocation or array lifting.
-
-The runtime reuses each secondary value for every lifted invocation.
+Otherwise, the runtime divides explicit inputs and arguments into ordinary and contextual groups. An expression is contextual when any part of it references the current operation's `this`. The runtime evaluates all ordinary expressions once, in their relative source order, before direct invocation or array lifting. It evaluates contextual expressions in their relative source order once for each effective invocation. It does not partially hoist a context-free subexpression out of a contextual expression.
 
 ```text
 players -> damage(
@@ -691,7 +690,13 @@ The example has these steps:
 3. Evaluate `random_damage()` once.
 4. Invoke `damage` for each player in array order.
 
-An empty source array still evaluates the explicit inputs and arguments once. It then performs zero command invocations.
+In the following example, `random_damage()` runs once per player because the complete argument references `this`:
+
+```text
+players -> damage(amount: random_damage() + this.health)
+```
+
+An empty source array evaluates ordinary explicit inputs and arguments once, evaluates no contextual expressions, and performs zero command invocations.
 
 If a secondary value produces an unhandled `Err`, the runtime skips the command and propagates that error.
 
@@ -718,6 +723,30 @@ A command with one output returns that output type directly. Its output name rem
 A command with several outputs returns its generated output record. The record can declare one default output.
 
 The runtime validates every output value against its descriptor before it returns the value to the script.
+
+### 10.6 Contextual `this`
+
+A pipeline primary and a member or query receiver introduce a lexical contextual scope for their secondary expressions. `this` has the static type of the effective value that reaches the operation after Result propagation and default-output projection. A directly assignable derived value retains its derived static type.
+
+For scalar lifting, `this` is the current adapted element. For an operation that directly consumes the complete array, `this` is that `Array<T>` value. A nested contextual operation introduces a new scope; its `this` shadows the outer value and the outer scope is restored afterward. A leading `.member` is exactly equivalent to `this.member`.
+
+`this` is invalid at top level, as an assignment target, and in a standalone invocation that has no enclosing contextual scope. A standalone command's explicit default input does not introduce a scope, but an expression used with `<-` can consume an already enclosing scope.
+
+### 10.7 Host constructor expressions
+
+A nominal host type can declare one constructor. `TypeName(...)` invokes it as an expression before command lookup. Constructors accept positional and named arguments with the same ordering, required, and constant-default rules as commands.
+
+```shelllang
+point = Vector3(1, 2, 3)
+transform = Transform(point, Quaternion(), Vector3(1, 1, 1))
+transform.position.y -> print
+```
+
+Constructors cannot be pipeline stages and do not accept `<-` entries. Arguments evaluate once in source order in the enclosing contextual scope, so nested constructors can reference `this`. The first argument `Err` propagates without invoking the constructor. A fallible constructor combines its declared error with argument errors by the nearest-common-error rule.
+
+`SL2501` reports a call to a non-constructible type, `SL2502` reports constructor use as a pipeline stage, and `SL2503` reports a constructor-specific invalid entry such as `<-`.
+
+Constructors are synchronous and contractually pure. Their values, errors, and CLR payloads are validated at the host boundary. Delegate exceptions and invalid outcomes are contained as host faults. ShellLang never discovers constructors through reflection.
 
 ## 11. Array lifting
 
@@ -810,17 +839,17 @@ The metadata service MUST expose them for help and completion.
 
 ### 12.1 Contextual element expressions
 
-`where`, `sort`, `any`, `all`, `select`, and keyed `distinct` accept a contextual element expression. A leading `.` in that expression refers to the current array element.
+`where`, `sort`, `any`, `all`, `select`, and keyed `distinct` accept a contextual element expression. In that expression, `this` is the current array element and a leading `.` is shorthand for `this.`.
 
 ```text
 players -> where(.health < 50)
 players -> sort(by: .health)
-players -> select(.health)
+players -> select(this.health)
 ```
 
-The compiler binds the contextual expression once. The runtime evaluates it separately for each element.
+The compiler gives each contextual element expression a lexical scope identity. The runtime evaluates it separately for each element. A nested intrinsic shadows and restores the nearest outer scope.
 
-Ordinary command arguments and query arguments never bind a leading `.`.
+Command arguments, query arguments, explicit inputs, constructors, and value-taking collection intrinsics can reference an enclosing `this`. For a value-taking intrinsic that consumes an array directly, `this` is the whole array; the element-expression intrinsics listed above introduce their documented element scope instead.
 
 If a contextual expression returns `Result<R,E>`, the intrinsic wraps its normal output in `Result<...,E>`. It stops at the first `Err` and adds the current index path. Contextual expressions run once per visited element in input order. Short-circuiting intrinsics do not visit later elements.
 
