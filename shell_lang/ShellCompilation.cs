@@ -25,7 +25,7 @@ public sealed class ShellCompilation
 	{
 		get;
 	}
-	public bool IsValid => Diagnostics.Count == 0 && Program is not null;
+	public bool IsValid => Diagnostics.All(x => x.Severity != DiagnosticSeverity.Error) && Program is not null;
 	public IReadOnlyList<CompilationDiagnostic> Diagnostics
 	{
 		get;

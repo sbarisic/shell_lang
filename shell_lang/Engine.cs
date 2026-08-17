@@ -77,7 +77,7 @@ public sealed partial class ShellEngine
 		var binder = new Binder(this, session, source, diagnostics);
 		var bound = binder.Bind(syntax);
 		return new ShellCompilation(this, source, diagnostics.ToArray(), bound.ResultType, CatalogRevision,
-			bound.Requirements, diagnostics.Count == 0 ? bound.Program : null);
+			bound.Requirements, diagnostics.Any(x => x.Severity == DiagnosticSeverity.Error) ? null : bound.Program);
 	}
 
 	public ExecutionResult Execute(ShellCompilation compilation, ShellSession session, ExecutionOptions? options = null)
@@ -116,11 +116,21 @@ public sealed partial class ShellEngine
 			start--;
 		var prefix = source[start..position];
 		var span = SourceSpan.FromBounds(source, start, position);
+		var callableStart = position;
+		while (callableStart > 0 && (char.IsLetterOrDigit(source[callableStart - 1]) ||
+			source[callableStart - 1] is '_' or ':'))
+			callableStart--;
+		var callablePrefix = source[callableStart..position];
+		var callableSpan = SourceSpan.FromBounds(source, callableStart, position);
+		var qualifiedCallablePrefix = callablePrefix.Contains("::", StringComparison.Ordinal);
 		var items = new List<CompletionItem>();
-		void Add(string name, CompletionItemKind kind, string type, string description)
+		void Add(string name, CompletionItemKind kind, string type, string description,
+			IReadOnlyList<IntrinsicSignatureDescriptor>? intrinsicSignatures = null)
 		{
+			if (qualifiedCallablePrefix)
+				return;
 			if (name.StartsWith(prefix, StringComparison.Ordinal))
-				items.Add(new(span, name, kind, type, description));
+				items.Add(new(span, name, kind, type, description, IntrinsicSignatures: intrinsicSignatures));
 		}
 		foreach (var binding in session.GetBindings())
 			Add(binding.Name, CompletionItemKind.Binding, TypeName(binding.Type), "Session binding.");
@@ -160,21 +170,29 @@ public sealed partial class ShellEngine
 		{
 			var primary = command.Inputs.FirstOrDefault(x => x.IsDefault);
 			if (pipelineType is null || (primary is not null && CanConnect(pipelineType.Value, primary.Type, true)))
-				Add(command.Name, CompletionItemKind.Command, DescribeCommand(command), command.Description);
+			{
+				if (command.QualifiedName.StartsWith(callablePrefix, StringComparison.Ordinal))
+					items.Add(new(callableSpan, command.QualifiedName, CompletionItemKind.Command,
+						DescribeCommand(command), command.Description, command.Deprecation is not null,
+						command.QualifiedName, command.Category, command.Namespace, command.Deprecation));
+			}
 		}
-		foreach (var intrinsic in IntrinsicNames)
+		foreach (var intrinsic in IntrinsicSchemas.Values)
 			if (pipelineType is null || IntrinsicApplies(intrinsic, pipelineType.Value))
-				Add(intrinsic, CompletionItemKind.Intrinsic, "intrinsic", "Core compiler intrinsic.");
+				Add(intrinsic.Name, CompletionItemKind.Intrinsic,
+					string.Join(" | ", intrinsic.Signatures.Select(FormatIntrinsicSignature)), intrinsic.Description,
+					intrinsic.Signatures);
 
 		var openParen = start == 0 ? -1 : source.LastIndexOf('(', start - 1);
 		if (openParen >= 0)
 		{
 			var commandEnd = openParen;
 			var commandStart = commandEnd;
-			while (commandStart > 0 && (char.IsLetterOrDigit(source[commandStart - 1]) || source[commandStart - 1] == '_'))
+			while (commandStart > 0 && (char.IsLetterOrDigit(source[commandStart - 1]) || source[commandStart - 1] is '_' or ':'))
 				commandStart--;
-			if (Commands.TryGetValue(source[commandStart..commandEnd], out var activeCommand))
+			if (TryGetCommand(source[commandStart..commandEnd], out var activeCallable))
 			{
+				var activeCommand = activeCallable.Command;
 				foreach (var port in activeCommand.Inputs)
 					Add(port.Name, CompletionItemKind.Port, TypeName(port.Type), port.Description);
 				foreach (var argument in activeCommand.Arguments)
@@ -245,20 +263,6 @@ public sealed partial class ShellEngine
 		return allowArray && entry.Kind == ShellTypeKind.Array && CanConnect(entry.ElementType!.Value, expected, true);
 	}
 
-	private bool IntrinsicApplies(string name, ShellTypeId type)
-	{
-		var entry = GetTypeEntry(type);
-		if (name is "require" or "value_or" or "error" or "is_ok")
-			return entry.Kind == ShellTypeKind.Result;
-		if (entry.Kind == ShellTypeKind.Array)
-			return true;
-		if (entry.Kind == ShellTypeKind.Result)
-			return IntrinsicApplies(name, entry.SuccessType!.Value);
-		if (entry.Kind == ShellTypeKind.OutputRecord && entry.DefaultOutput is { } field)
-			return IntrinsicApplies(name, entry.OutputFields![field]);
-		return false;
-	}
-
 	public HelpItem? GetHelp(SymbolId symbol)
 	{
 		if (!_symbols.TryGetValue(symbol, out var value))
@@ -270,13 +274,18 @@ public sealed partial class ShellEngine
 				c.Arguments.Select(x => new HelpParameter(x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
 				c.Outputs.Select(x => new HelpParameter(x.Name, x.Type, x.Description, IsDefault: x.IsDefault)).ToArray(), c.ErrorType,
 				c.RuntimeFaults.Select(x => RuntimeFaults[x.Value]).ToArray(),
-				contextType: c.Inputs.FirstOrDefault(x => x.IsDefault)?.Type),
+				contextType: c.Inputs.FirstOrDefault(x => x.IsDefault)?.Type,
+				canonicalName: c.QualifiedName, category: c.Category, namespaceName: c.Namespace,
+				aliases: c.Aliases, examples: c.Examples, introducedVersion: c.IntroducedVersion,
+				deprecation: c.Deprecation),
 			GlobalDescriptor g => new HelpItem(g.Id, g.Name, "global", g.Description, outputs: [new("value", g.Type, g.Description)]),
 			MemberDescriptor m => new HelpItem(m.Id, m.Name, "member", m.Description, inputs: [new("receiver", m.ReceiverType, "Receiver.")], outputs: [new("value", m.ValueType, m.Description)]),
 			QueryDescriptor q => new HelpItem(q.Id, q.Name, "query", q.Description, inputs: [new("receiver", q.ReceiverType, "Receiver.")],
 				arguments: q.Arguments.Select(x => new HelpParameter(x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
 				outputs: [new("value", q.OutputType, q.Description)], errorType: q.ErrorType, contextType: q.ReceiverType),
-			IntrinsicDescriptor i => new HelpItem(i.Id, i.Name, "intrinsic", i.Description),
+			IntrinsicDescriptor i => new HelpItem(i.Id, i.Name, "intrinsic", i.Description,
+				signatures: i.Signatures.Select(FormatIntrinsicSignature).ToArray(),
+				intrinsicPrimaryShape: i.PrimaryShape, intrinsicSignatures: i.Signatures),
 			TypeDescriptor t => BuildTypeHelp(t.Id, t.SymbolId),
 			EnumTypeDescriptor e => BuildTypeHelp(e.Id, e.SymbolId),
 			ErrorTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "error", e.Description),
@@ -341,6 +350,12 @@ public sealed partial class ShellEngine
 	}
 	private string DescribeConversions(ShellTypeId type) =>
 		$"{TypeName(type)}(value) -> {TypeName(type)} or Result<{TypeName(type)},ConversionError>";
+	private static string FormatIntrinsicSignature(IntrinsicSignatureDescriptor signature)
+	{
+		var arguments = signature.Parameters.Count == 0 ? string.Empty :
+			", " + string.Join(", ", signature.Parameters.Select(x => $"{x.Name}: {x.TypePattern}"));
+		return $"{signature.PrimaryTypePattern}{arguments} -> {signature.ResultTypePattern}";
+	}
 
 	private ShellTypeId? FindCompletionContextType(string source, int position, ShellSession session,
 		int arrow, ShellTypeId? pipelineType)
@@ -351,14 +366,14 @@ public sealed partial class ShellEngine
 			while (stageStart < position && char.IsWhiteSpace(source[stageStart]))
 				stageStart++;
 			var stageEnd = stageStart;
-			while (stageEnd < position && (char.IsLetterOrDigit(source[stageEnd]) || source[stageEnd] == '_'))
+			while (stageEnd < position && (char.IsLetterOrDigit(source[stageEnd]) || source[stageEnd] is '_' or ':'))
 				stageEnd++;
 			var open = source.IndexOf('(', stageEnd, Math.Max(0, position - stageEnd));
 			if (open >= 0 && open < position)
 			{
 				var name = source[stageStart..stageEnd];
-				if (Commands.TryGetValue(name, out var command) &&
-					command.Inputs.FirstOrDefault(x => x.IsDefault) is { } input)
+				if (TryGetCommand(name, out var callable) &&
+					callable.Command.Inputs.FirstOrDefault(x => x.IsDefault) is { } input)
 					return EffectiveCompletionType(actual, input.Type, true);
 				if (name is "where" or "sort" or "any" or "all" or "select" or "distinct")
 				{

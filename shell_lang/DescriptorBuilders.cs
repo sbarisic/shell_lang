@@ -123,6 +123,12 @@ public sealed class CommandBuilder
 	private readonly List<RuntimeFaultCode> _faults = [];
 	private ShellTypeId? _error;
 	private CommandInvoker? _invoke;
+	private string? _namespace;
+	private string? _category;
+	private readonly List<string> _examples = [];
+	private readonly List<CommandAliasDescriptor> _aliases = [];
+	private string? _introducedVersion;
+	private CommandDeprecation? _deprecation;
 	internal CommandBuilder(string name) => _name = name;
 	public CommandBuilder Description(string value)
 	{
@@ -154,11 +160,26 @@ public sealed class CommandBuilder
 		_faults.Add(code);
 		return this;
 	}
+	public CommandBuilder Namespace(string value) { _namespace = value; return this; }
+	public CommandBuilder Category(string value) { _category = value; return this; }
+	public CommandBuilder Example(string value) { _examples.Add(value); return this; }
+	public CommandBuilder Alias(string name, CommandDeprecation? deprecation = null)
+	{
+		_aliases.Add(new(name, deprecation));
+		return this;
+	}
+	public CommandBuilder IntroducedIn(string version) { _introducedVersion = version; return this; }
+	public CommandBuilder Deprecated(string message, string sinceVersion, string? replacement = null)
+	{
+		_deprecation = new(message, sinceVersion, replacement);
+		return this;
+	}
 	public CommandBuilder Invoke(CommandInvoker invoke)
 	{
 		_invoke = invoke;
 		return this;
 	}
 	public CommandDescriptor Build() => new(_name, _description, _inputs, _arguments, _outputs,
-		_invoke ?? throw new InvalidOperationException("A command invoker is required."), _error, _faults);
+		_invoke ?? throw new InvalidOperationException("A command invoker is required."), _error, _faults,
+		_namespace, _category, _examples, _aliases, _introducedVersion, _deprecation);
 }

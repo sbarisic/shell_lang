@@ -213,7 +213,19 @@ internal sealed class MockGame
 
         var commands = BuildCommands();
         var fault = new RuntimeFaultDescriptor(new RuntimeFaultCode("GAME1001"), "MapMarkerKindMismatch", "A marker command received the wrong classname.");
-        return engine.Register(new DescriptorSet(types, enums, errors, globals, commands, [fault]));
+        var commandNamespaces = new[]
+        {
+            new CommandNamespaceDescriptor("system", "General host operations."),
+            new CommandNamespaceDescriptor("world", "World lifecycle and rules operations."),
+            new CommandNamespaceDescriptor("map", "Map loading and navigation operations."),
+            new CommandNamespaceDescriptor("encounter", "Encounter and monster operations."),
+            new CommandNamespaceDescriptor("player", "Player and camera operations."),
+            new CommandNamespaceDescriptor("inventory", "Inventory and equipment operations."),
+            new CommandNamespaceDescriptor("objectives", "Objective operations."),
+            new CommandNamespaceDescriptor("audio", "Audio and ambience operations."),
+            new CommandNamespaceDescriptor("telemetry", "Telemetry operations.")
+        };
+        return engine.Register(new DescriptorSet(types, enums, errors, globals, commands, [fault], commandNamespaces));
     }
 
     private TypeDescriptor Host<T>(string name, Func<TypeDescriptorBuilder<T>, TypeDescriptorBuilder<T>>? configure = null) where T : notnull
@@ -273,8 +285,14 @@ internal sealed class MockGame
                     throw;
                 }
             };
+            var commandNamespace = CommandNamespaceFor(name);
+            var qualifiedName = $"{commandNamespace}::{name}";
+            var alias = new CommandAliasDescriptor(name,
+                new CommandDeprecation("Use the canonical qualified command.", "0.1", qualifiedName));
+            var examples = name == "print" ? new[] { "1 -> system::print" } : null;
             var cmd = new CommandDescriptor(name, $"Mock {name} command.", inputList, argumentList, outputList, traced,
-                error is null ? null : _errors[error], markerFault ? [new RuntimeFaultCode("GAME1001")] : null);
+                error is null ? null : _errors[error], markerFault ? [new RuntimeFaultCode("GAME1001")] : null,
+                commandNamespace, commandNamespace, examples, [alias], "0.1");
             c.Add(cmd);
             return cmd;
         }
@@ -502,6 +520,30 @@ internal sealed class MockGame
     private static string Quote(string value) => $"\"{value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
     private static string ToPascal(string value) => string.Concat(value.Split('_', StringSplitOptions.RemoveEmptyEntries)
         .Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
+
+    private static string CommandNamespaceFor(string name) => name switch
+    {
+        "print" or "require_true" => "system",
+        "set_loading_stage" or "pause_simulation" or "disable_player_input" or "enable_player_input" or
+            "resume_simulation" or "clear_transient_entities" or "set_time_scale" or "set_gravity" or
+            "set_friendly_fire" or "set_respawn_policy" or "set_monster_scaling" or "choose_weather" or
+            "apply_weather" => "world",
+        "derive_seed" or "find_entities" or "validate_player_spawns" or "validate_monster_spawns" or
+            "validate_navigation" or "activate_navigation" or "choose_random_spawn" or "register_checkpoint" or
+            "set_initial_checkpoint" => "map",
+        "spawn_monster" or "attach_to_encounter" or "initialize_monster_ai" or "assign_patrol_routes" or
+            "set_health_multiplier" or "set_damage_multiplier" or "give_monster_armor" or "set_monster_dormant" or
+            "set_guard_radius" or "wake_monster" or "spawn_loot" or "set_player" or "set_difficulty" or
+            "arm_encounter" => "encounter",
+        "spawn_player" or "set_camera_mode" or "fade_from_black" or "set_max_health" or "heal" or
+            "set_max_armor" or "give_armor" or "show_message" => "player",
+        "set_inventory_capacity" or "give_credits" or "give_ammo" or "equip_weapon" or "give_item" or
+            "grant_weapon_to" or "grant_item_to" => "inventory",
+        "clear_objectives" or "add_objective" or "activate_objective" => "objectives",
+        "spawn_ambient_emitter" or "start_ambient_emitter" or "play_music" => "audio",
+        "log_map_started" => "telemetry",
+        _ => throw new InvalidOperationException($"No command namespace is assigned to '{name}'.")
+    };
 
     private void AddFluentWorld(List<CommandDescriptor> _, Func<string, IEnumerable<InputPortDescriptor>?, IEnumerable<ArgumentDescriptor>?, IEnumerable<OutputPortDescriptor>?, string?, CommandInvoker, bool, CommandDescriptor> add,
         Func<string, string, bool, InputPortDescriptor> input, Func<string, ShellTypeId, int, ArgumentDescriptor> arg,

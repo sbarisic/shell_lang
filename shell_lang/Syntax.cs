@@ -6,7 +6,7 @@ namespace ShellLang;
 internal enum TokenKind
 {
 	End, Bad, NewLine, Semicolon, Identifier, Integer, Fractional, String, True, False, This,
-	OpenParen, CloseParen, OpenBracket, CloseBracket, Comma, Dot, Colon,
+	OpenParen, CloseParen, OpenBracket, CloseBracket, Comma, Dot, Colon, DoubleColon,
 	Assign, Arrow, InputArrow, Plus, Minus, Star, Slash, Percent, Bang,
 	EqualEqual, BangEqual, Less, LessEqual, Greater, GreaterEqual, AndAnd, OrOr
 }
@@ -173,7 +173,12 @@ internal sealed class Lexer
 				_ => TokenKind.Bad
 			};
 			var width = 1;
-			if (c == '-' && Peek(1) == '>')
+			if (c == ':' && Peek(1) == ':')
+			{
+				kind = TokenKind.DoubleColon;
+				width = 2;
+			}
+			else if (c == '-' && Peek(1) == '>')
 			{
 				kind = TokenKind.Arrow;
 				width = 2;
@@ -334,7 +339,8 @@ internal sealed class Parser
 			Error("SL1102", "A pipeline stage must name a command or intrinsic.", Current.Span);
 			return ParsePrimary();
 		}
-		result = Peek(1).Kind == TokenKind.OpenParen ? ParseInvocation() : new NameSyntax(Next().Text, Previous.Span);
+		result = Peek(1).Kind is TokenKind.OpenParen or TokenKind.DoubleColon
+			? ParseCallable() : new NameSyntax(Next().Text, Previous.Span);
 		while (true)
 		{
 			SkipNewlinesBefore(TokenKind.Dot);
@@ -407,7 +413,8 @@ internal sealed class Parser
 			return new LiteralSyntax(token);
 		}
 		if (token.Kind == TokenKind.Identifier)
-			return Peek(1).Kind == TokenKind.OpenParen ? ParseInvocation() : new NameSyntax(Next().Text, token.Span);
+			return Peek(1).Kind is TokenKind.OpenParen or TokenKind.DoubleColon
+				? ParseCallable() : new NameSyntax(Next().Text, token.Span);
 		if (token.Kind == TokenKind.This)
 		{
 			Next();
@@ -458,11 +465,23 @@ internal sealed class Parser
 		return new LiteralSyntax(new Token(TokenKind.Integer, "0", "0", token.Span));
 	}
 
-	private InvocationSyntax ParseInvocation()
+	private ExpressionSyntax ParseCallable()
 	{
-		var name = Match(TokenKind.Identifier, "Expected an invocation name.");
-		var entries = ParseEntries(TokenKind.CloseParen, out var end);
-		return new InvocationSyntax(name.Text, entries, Bounds(name.Span.Offset, end));
+		var first = Match(TokenKind.Identifier, "Expected an invocation name.");
+		var segments = new List<string> { first.Text };
+		var end = first.Span.End;
+		while (Current.Kind == TokenKind.DoubleColon)
+		{
+			Next();
+			var segment = Match(TokenKind.Identifier, "Expected a command name after '::'.");
+			segments.Add(segment.Text);
+			end = segment.Span.End;
+		}
+		var name = string.Join("::", segments);
+		if (Current.Kind != TokenKind.OpenParen)
+			return new NameSyntax(name, Bounds(first.Span.Offset, end));
+		var entries = ParseEntries(TokenKind.CloseParen, out end);
+		return new InvocationSyntax(name, entries, Bounds(first.Span.Offset, end));
 	}
 
 	private IReadOnlyList<InvocationEntrySyntax> ParseEntries(TokenKind closeKind, out int end)

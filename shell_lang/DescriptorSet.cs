@@ -4,7 +4,8 @@ public sealed class DescriptorSet
 {
 	public DescriptorSet(IEnumerable<TypeDescriptor>? types = null, IEnumerable<EnumTypeDescriptor>? enums = null,
 		IEnumerable<ErrorTypeDescriptor>? errors = null, IEnumerable<GlobalDescriptor>? globals = null,
-		IEnumerable<CommandDescriptor>? commands = null, IEnumerable<RuntimeFaultDescriptor>? runtimeFaults = null)
+		IEnumerable<CommandDescriptor>? commands = null, IEnumerable<RuntimeFaultDescriptor>? runtimeFaults = null,
+		IEnumerable<CommandNamespaceDescriptor>? commandNamespaces = null)
 	{
 		Types = Array.AsReadOnly((types ?? []).ToArray());
 		Enums = Array.AsReadOnly((enums ?? []).ToArray());
@@ -12,6 +13,7 @@ public sealed class DescriptorSet
 		Globals = Array.AsReadOnly((globals ?? []).ToArray());
 		Commands = Array.AsReadOnly((commands ?? []).ToArray());
 		RuntimeFaults = Array.AsReadOnly((runtimeFaults ?? []).ToArray());
+		CommandNamespaces = Array.AsReadOnly((commandNamespaces ?? []).ToArray());
 	}
 	public IReadOnlyList<TypeDescriptor> Types
 	{
@@ -37,4 +39,5 @@ public sealed class DescriptorSet
 	{
 		get;
 	}
+	public IReadOnlyList<CommandNamespaceDescriptor> CommandNamespaces { get; }
 }

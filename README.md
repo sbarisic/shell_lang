@@ -5,20 +5,20 @@ ShellLang is a typed command and dataflow language for in-process .NET hosts.
 Commands exchange typed values instead of byte streams. A host can expose game objects, tools, services, or other local values through explicit descriptors.
 
 ```shelllang
-target = find_entities(classname: "info_spawn")
+target = map::find_entities(classname: "info_spawn")
     -> where(.spawn_order > 1)
     -> first
     -> require
 
-target.position -> print
+target.position -> system::print
 ```
 
 `this` names the effective value at the current operation. Host types can also expose one explicit constructor:
 
 ```shelllang
-local_player -> give_credits(amount: this.name_length()) -> require
+local_player -> inventory::give_credits(amount: this.name_length()) -> require
 transform = Transform(Vector3(1, 2, 3), Quaternion(), Vector3(1, 1, 1))
-transform.position.x -> print
+transform.position.x -> system::print
 gravity = Physics.gravity
 weapons = Weapon.values
 precise = Float64(1)
@@ -45,6 +45,7 @@ The `shell_lang_test` project is an interactive in-game-style console and bootst
 
 - [Language specification](LANGUAGE.md) defines syntax, types, pipelines, lifting, Results, faults, and collection intrinsics.
 - [C# hosting contract](HOSTING.md) defines descriptors, sessions, compilation, execution, diagnostics, and the host security boundary.
+- [Event-system design](EVENTS.md) defines the deferred long-lived subscription contract without adding event behavior to 0.1.
 
 The [map bootstrap example](EXAMPLE.md) shows a complete 280-line ShellLang script for an in-game map.
 

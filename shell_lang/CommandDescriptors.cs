@@ -2,6 +2,10 @@ using System.Collections.ObjectModel;
 
 namespace ShellLang;
 
+public sealed record CommandDeprecation(string Message, string SinceVersion, string? Replacement = null);
+public sealed record CommandAliasDescriptor(string Name, CommandDeprecation? Deprecation = null);
+public sealed record CommandNamespaceDescriptor(string Name, string Description);
+
 public sealed class InputPortDescriptor
 {
 	public InputPortDescriptor(string name, string description, ShellTypeId type, bool isDefault = false)
@@ -121,7 +125,10 @@ public sealed class CommandDescriptor
 	public CommandDescriptor(string name, string description, IEnumerable<InputPortDescriptor>? inputs,
 		IEnumerable<ArgumentDescriptor>? arguments, IEnumerable<OutputPortDescriptor>? outputs,
 		CommandInvoker invoke, ShellTypeId? errorType = null,
-		IEnumerable<RuntimeFaultCode>? runtimeFaults = null)
+		IEnumerable<RuntimeFaultCode>? runtimeFaults = null, string? namespaceName = null,
+		string? category = null, IEnumerable<string>? examples = null,
+		IEnumerable<CommandAliasDescriptor>? aliases = null, string? introducedVersion = null,
+		CommandDeprecation? deprecation = null)
 	{
 		Name = name;
 		Description = description;
@@ -131,6 +138,12 @@ public sealed class CommandDescriptor
 		ErrorType = errorType;
 		RuntimeFaults = Array.AsReadOnly((runtimeFaults ?? []).ToArray());
 		Invoke = invoke ?? throw new ArgumentNullException(nameof(invoke));
+		Namespace = namespaceName;
+		Category = category;
+		Examples = Array.AsReadOnly((examples ?? []).ToArray());
+		Aliases = Array.AsReadOnly((aliases ?? []).ToArray());
+		IntroducedVersion = introducedVersion;
+		Deprecation = deprecation;
 		if (Outputs.Count > 1)
 			OutputRecordType = IdentitySource.NextType();
 	}
@@ -146,6 +159,13 @@ public sealed class CommandDescriptor
 	{
 		get;
 	}
+	public string? Namespace { get; }
+	public string QualifiedName => Namespace is null ? Name : $"{Namespace}::{Name}";
+	public string? Category { get; }
+	public IReadOnlyList<string> Examples { get; }
+	public IReadOnlyList<CommandAliasDescriptor> Aliases { get; }
+	public string? IntroducedVersion { get; }
+	public CommandDeprecation? Deprecation { get; }
 	public IReadOnlyList<InputPortDescriptor> Inputs
 	{
 		get;

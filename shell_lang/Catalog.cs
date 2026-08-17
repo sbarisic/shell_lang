@@ -154,7 +154,9 @@ public sealed class DescriptorCatalog
 	public IReadOnlyList<EnumTypeDescriptor> Enums => _engine.Enums.ToArray();
 	public IReadOnlyList<ErrorTypeDescriptor> Errors => _engine.Errors.ToArray();
 	public IReadOnlyList<GlobalDescriptor> Globals => _engine.Globals.Values.OrderBy(static x => x.Name).ToArray();
-	public IReadOnlyList<CommandDescriptor> Commands => _engine.Commands.Values.OrderBy(static x => x.Name).ToArray();
+	public IReadOnlyList<CommandDescriptor> Commands => _engine.Commands.Values.OrderBy(static x => x.QualifiedName).ToArray();
+	public IReadOnlyList<CommandNamespaceDescriptor> CommandNamespaces =>
+		_engine.CommandNamespaces.Values.OrderBy(static x => x.Name).ToArray();
 	public IReadOnlyList<RuntimeFaultDescriptor> RuntimeFaults => _engine.RuntimeFaults.Values.OrderBy(static x => x.Code.Value).ToArray();
 	public IReadOnlyList<IntrinsicDescriptor> Intrinsics => _engine.Intrinsics.Values.OrderBy(static x => x.Name).ToArray();
 	public string GetTypeName(ShellTypeId type) => _engine.GetTypeEntry(type).Name;

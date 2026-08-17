@@ -20,6 +20,36 @@ public sealed partial class ShellEngine
 			if (name == "this")
 				d.Add(new("SL3022", $"The reserved contextual name 'this' cannot be registered as a {kind}."));
 		}
+		void QualifiedName(string name, string kind)
+		{
+			var segments = name.Split("::", StringSplitOptions.None);
+			if (segments.Length == 0 || segments.Any(string.IsNullOrEmpty))
+			{
+				d.Add(new("SL3001", $"Invalid {kind} name '{name}'."));
+				return;
+			}
+			foreach (var segment in segments)
+				Name(segment, kind);
+		}
+		var newNamespaces = new HashSet<string>(StringComparer.Ordinal);
+		foreach (var commandNamespace in set.CommandNamespaces)
+		{
+			QualifiedName(commandNamespace.Name, "command namespace");
+			if (!newNamespaces.Add(commandNamespace.Name) || CommandNamespaces.ContainsKey(commandNamespace.Name))
+				d.Add(new("SL3002", $"Duplicate command namespace '{commandNamespace.Name}'."));
+			if (string.IsNullOrWhiteSpace(commandNamespace.Description))
+				d.Add(new("SL3003", $"Command namespace '{commandNamespace.Name}' needs a description."));
+		}
+		foreach (var commandNamespace in set.CommandNamespaces)
+		{
+			var separator = commandNamespace.Name.LastIndexOf("::", StringComparison.Ordinal);
+			if (separator > 0)
+			{
+				var parent = commandNamespace.Name[..separator];
+				if (!CommandNamespaces.ContainsKey(parent) && !newNamespaces.Contains(parent))
+					d.Add(new("SL3025", $"Command namespace '{commandNamespace.Name}' requires registered parent '{parent}'."));
+			}
+		}
 		foreach (var item in set.Types.Cast<object>().Concat(set.Enums).Concat(set.Errors))
 		{
 			var name = item switch
@@ -134,22 +164,50 @@ public sealed partial class ShellEngine
 		ValidateErrorCycles(set.Errors, d);
 		resolvedSymbols = ResolveTypeSymbols(set.Types, d);
 		var callableNames = new HashSet<string>(IntrinsicNames, StringComparer.Ordinal);
-		callableNames.UnionWith(Commands.Keys);
+		callableNames.UnionWith(CommandCallables.Keys);
 		callableNames.UnionWith(Types.Where(x => x.Constructor is not null).Select(x => x.Name));
 		callableNames.UnionWith(_typeEntries.Values.Where(x => IsConversionTarget(x.Id)).Select(x => x.Name));
 		foreach (var type in set.Types.Where(x => x.Constructor is not null))
 			if (!callableNames.Add(type.Name))
 				d.Add(new("SL3023", $"Constructible type '{type.Name}' collides with an existing callable name."));
-		var commandNames = new HashSet<string>(Commands.Keys, StringComparer.Ordinal);
 		foreach (var command in set.Commands)
 		{
 			Name(command.Name, "command");
-			if (!commandNames.Add(command.Name) || IntrinsicNames.Contains(command.Name))
-				d.Add(new("SL3007", $"Duplicate or reserved command '{command.Name}'."));
-			if (!callableNames.Add(command.Name))
-				d.Add(new("SL3023", $"Command '{command.Name}' collides with a constructible type or intrinsic."));
+			if (command.Namespace is { } namespaceName)
+			{
+				QualifiedName(namespaceName, "command namespace");
+				if (!CommandNamespaces.ContainsKey(namespaceName) && !newNamespaces.Contains(namespaceName))
+					d.Add(new("SL3025", $"Command '{command.QualifiedName}' uses unknown namespace '{namespaceName}'."));
+			}
+			QualifiedName(command.QualifiedName, "command");
+			if (!callableNames.Add(command.QualifiedName))
+			{
+				d.Add(new("SL3007", $"Duplicate or reserved command '{command.QualifiedName}'."));
+				d.Add(new("SL3023", $"Command '{command.QualifiedName}' collides with an existing callable spelling."));
+			}
+			foreach (var alias in command.Aliases)
+			{
+				QualifiedName(alias.Name, "command alias");
+				var separator = alias.Name.LastIndexOf("::", StringComparison.Ordinal);
+				if (separator > 0)
+				{
+					var aliasNamespace = alias.Name[..separator];
+					if (!CommandNamespaces.ContainsKey(aliasNamespace) && !newNamespaces.Contains(aliasNamespace))
+						d.Add(new("SL3025", $"Alias '{alias.Name}' uses unknown namespace '{aliasNamespace}'."));
+				}
+				if (!callableNames.Add(alias.Name))
+					d.Add(new("SL3023", $"Alias '{alias.Name}' for command '{command.QualifiedName}' collides with an existing callable spelling."));
+				ValidateDeprecation(alias.Deprecation, $"Alias '{alias.Name}'", QualifiedName, d);
+			}
+			ValidateDeprecation(command.Deprecation, $"Command '{command.QualifiedName}'", QualifiedName, d);
+			if (command.Category is not null && string.IsNullOrWhiteSpace(command.Category))
+				d.Add(new("SL3003", $"Command '{command.QualifiedName}' has an empty category."));
+			if (command.IntroducedVersion is not null && string.IsNullOrWhiteSpace(command.IntroducedVersion))
+				d.Add(new("SL3003", $"Command '{command.QualifiedName}' has an empty introduction version."));
+			if (command.Examples.Any(string.IsNullOrWhiteSpace))
+				d.Add(new("SL3003", $"Command '{command.QualifiedName}' has an empty example."));
 			if (string.IsNullOrWhiteSpace(command.Description))
-				d.Add(new("SL3003", $"Command '{command.Name}' needs a description."));
+				d.Add(new("SL3003", $"Command '{command.QualifiedName}' needs a description."));
 			if (command.Inputs.Count(x => x.IsDefault) > 1)
 				d.Add(new("SL3008", $"Command '{command.Name}' has more than one default input."));
 			if (command.Outputs.Count(x => x.IsDefault) > 1)
@@ -211,6 +269,17 @@ public sealed partial class ShellEngine
 				d.Add(new("SL3003", $"Runtime fault '{fault.Code}' needs a description."));
 		}
 		return d;
+	}
+
+	private static void ValidateDeprecation(CommandDeprecation? deprecation, string owner,
+		Action<string, string> validateName, List<HostingDiagnostic> diagnostics)
+	{
+		if (deprecation is null)
+			return;
+		if (string.IsNullOrWhiteSpace(deprecation.Message) || string.IsNullOrWhiteSpace(deprecation.SinceVersion))
+			diagnostics.Add(new("SL3003", $"{owner} has incomplete deprecation metadata."));
+		if (deprecation.Replacement is { } replacement)
+			validateName(replacement, "deprecation replacement");
 	}
 
 	private Dictionary<ShellTypeId, IReadOnlyList<ResolvedTypeSymbol>> ResolveTypeSymbols(
@@ -471,6 +540,8 @@ public sealed partial class ShellEngine
 		}
 		foreach (var fault in descriptors.RuntimeFaults)
 			RuntimeFaults.Add(fault.Code.Value, fault);
+		foreach (var commandNamespace in descriptors.CommandNamespaces)
+			CommandNamespaces.Add(commandNamespace.Name, commandNamespace);
 		foreach (var global in descriptors.Globals)
 		{
 			global.Id = NextSymbol(global);
@@ -493,7 +564,10 @@ public sealed partial class ShellEngine
 					DefaultOutput = command.Outputs.FirstOrDefault(x => x.IsDefault)?.Name
 				});
 			}
-			Commands.Add(command.Name, command);
+			Commands.Add(command.QualifiedName, command);
+			CommandCallables.Add(command.QualifiedName, new(command, command.Deprecation, false));
+			foreach (var alias in command.Aliases)
+				CommandCallables.Add(alias.Name, new(command, alias.Deprecation, true));
 		}
 		CatalogRevision++;
 		return new RegistrationResult(Array.Empty<HostingDiagnostic>());

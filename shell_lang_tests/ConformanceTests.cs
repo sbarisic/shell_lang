@@ -250,10 +250,12 @@ public sealed partial class ConformanceTests
 	public void Metadata()
 	{
 		var (engine, _, session) = Fixture();
-		Assert.Contains(engine.GetCompletions("spa", 3, session).Items, x => x.InsertionText == "spawn_player");
+		Assert.Contains(engine.GetCompletions("player::spa", 11, session).Items,
+			x => x.InsertionText == "player::spawn_player");
 		var command = engine.Catalog.Commands.Single(x => x.Name == "spawn_player");
 		var help = engine.GetHelp(command.Id);
 		Assert.Equal("spawn_player", help!.Name);
+		Assert.Equal("player::spawn_player", help.CanonicalName);
 		Assert.Equal(3, help.Inputs.Count);
 		Assert.Contains(engine.GetCompletions("map.na", 6, session).Items, x => x.InsertionText == "name");
 	}

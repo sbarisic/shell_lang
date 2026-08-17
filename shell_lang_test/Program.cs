@@ -89,7 +89,7 @@ internal static class InteractiveConsole
 			Console.WriteLine();
 			Console.WriteLine("ShellLang commands:");
 			foreach (var command in engine.Catalog.Commands)
-				Console.WriteLine($"  {command.Name,-28} {command.Description}");
+				Console.WriteLine($"  {command.QualifiedName,-36} {command.Description}");
 			Console.WriteLine();
 			Console.WriteLine("Collection and Result intrinsics:");
 			foreach (var intrinsic in engine.Catalog.Intrinsics)
@@ -124,7 +124,7 @@ internal static class InteractiveConsole
 	private static HelpItem? FindHelp(ShellEngine engine, string name)
 	{
 		foreach (var command in engine.Catalog.Commands)
-			if (command.Name == name)
+			if (command.QualifiedName == name || command.Aliases.Any(alias => alias.Name == name))
 				return engine.GetHelp(command.Id);
 		foreach (var intrinsic in engine.Catalog.Intrinsics)
 			if (intrinsic.Name == name)
@@ -146,8 +146,16 @@ internal static class InteractiveConsole
 
 	private static void PrintHelp(ShellEngine engine, HelpItem help)
 	{
-		Console.WriteLine($"{help.Name} ({help.Kind})");
+		Console.WriteLine($"{help.CanonicalName ?? help.Name} ({help.Kind})");
 		Console.WriteLine(help.Description);
+		if (help.Namespace is not null)
+			Console.WriteLine($"Namespace: {help.Namespace}");
+		if (help.Category is not null)
+			Console.WriteLine($"Category: {help.Category}");
+		if (help.Aliases.Count > 0)
+			Console.WriteLine($"Aliases: {string.Join(", ", help.Aliases.Select(alias => alias.Name))}");
+		if (help.Deprecation is { } deprecation)
+			Console.WriteLine($"Deprecated since {deprecation.SinceVersion}: {deprecation.Message}");
 		PrintParameters("Inputs", help.Inputs);
 		PrintParameters("Arguments", help.Arguments);
 		PrintParameters("Outputs", help.Outputs);

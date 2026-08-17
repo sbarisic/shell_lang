@@ -14,6 +14,7 @@ public sealed class BootstrapExampleTests
 		Assert.NotNull(result.Compilation);
 		Assert.True(result.Compilation.IsValid,
 			string.Join(Environment.NewLine, result.Compilation.Diagnostics));
+		Assert.Empty(result.Compilation.Diagnostics);
 		Assert.NotNull(result.Execution);
 		Assert.Equal(ExecutionStatus.Completed, result.Execution.Status);
 		Assert.Equal(280, result.ScriptLineCount);

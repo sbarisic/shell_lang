@@ -55,7 +55,7 @@ public sealed class CompilationDiagnostic
 	internal CompilationDiagnostic(string code, string message, SourceSpan source,
 		ShellTypeId? expectedType = null, ShellTypeId? actualType = null,
 		IReadOnlyList<string>? attemptedAdaptations = null, string? symbolName = null,
-		ShellTypeId? contextType = null)
+		ShellTypeId? contextType = null, DiagnosticSeverity severity = DiagnosticSeverity.Error)
 	{
 		Code = code;
 		Message = message;
@@ -65,12 +65,13 @@ public sealed class CompilationDiagnostic
 		AttemptedAdaptations = attemptedAdaptations ?? Array.Empty<string>();
 		SymbolName = symbolName;
 		ContextType = contextType;
+		Severity = severity;
 	}
 	public string Code
 	{
 		get;
 	}
-	public DiagnosticSeverity Severity => DiagnosticSeverity.Error;
+	public DiagnosticSeverity Severity { get; }
 	public string Message
 	{
 		get;
@@ -371,7 +372,10 @@ public enum CompletionItemKind
 	Binding, Global, Type, Command, Intrinsic, Member, Argument, Port, EnumMember, Context
 }
 public sealed record CompletionItem(SourceSpan ReplacementSpan, string InsertionText,
-	CompletionItemKind Kind, string DisplayType, string Description);
+	CompletionItemKind Kind, string DisplayType, string Description,
+	bool IsDeprecated = false, string? CanonicalName = null, string? Category = null,
+	string? Namespace = null, CommandDeprecation? Deprecation = null,
+	IReadOnlyList<IntrinsicSignatureDescriptor>? IntrinsicSignatures = null);
 public sealed class CompletionList
 {
 	internal CompletionList(IReadOnlyList<CompletionItem> items) => Items = items;
@@ -394,7 +398,12 @@ public sealed class HelpItem
 		IReadOnlyList<HelpParameter>? outputs = null, ShellTypeId? errorType = null,
 		IReadOnlyList<RuntimeFaultDescriptor>? runtimeFaults = null, IReadOnlyList<string>? members = null,
 		ShellTypeId? contextType = null, IReadOnlyList<HelpTypeValue>? typeValues = null,
-		IReadOnlyList<HelpConversion>? conversions = null)
+		IReadOnlyList<HelpConversion>? conversions = null, IReadOnlyList<string>? signatures = null,
+		string? canonicalName = null, string? category = null, string? namespaceName = null,
+		IReadOnlyList<CommandAliasDescriptor>? aliases = null, IReadOnlyList<string>? examples = null,
+		string? introducedVersion = null, CommandDeprecation? deprecation = null,
+		IntrinsicPrimaryShape? intrinsicPrimaryShape = null,
+		IReadOnlyList<IntrinsicSignatureDescriptor>? intrinsicSignatures = null)
 	{
 		Id = id;
 		Name = name;
@@ -409,6 +418,16 @@ public sealed class HelpItem
 		ContextType = contextType;
 		TypeValues = typeValues ?? Array.Empty<HelpTypeValue>();
 		Conversions = conversions ?? Array.Empty<HelpConversion>();
+		Signatures = signatures ?? Array.Empty<string>();
+		CanonicalName = canonicalName;
+		Category = category;
+		Namespace = namespaceName;
+		Aliases = aliases ?? Array.Empty<CommandAliasDescriptor>();
+		Examples = examples ?? Array.Empty<string>();
+		IntroducedVersion = introducedVersion;
+		Deprecation = deprecation;
+		IntrinsicPrimaryShape = intrinsicPrimaryShape;
+		IntrinsicSignatures = intrinsicSignatures ?? Array.Empty<IntrinsicSignatureDescriptor>();
 	}
 	public SymbolId Id
 	{
@@ -456,15 +475,28 @@ public sealed class HelpItem
 	}
 	public IReadOnlyList<HelpTypeValue> TypeValues { get; }
 	public IReadOnlyList<HelpConversion> Conversions { get; }
+	public IReadOnlyList<string> Signatures { get; }
+	public string? CanonicalName { get; }
+	public string? Category { get; }
+	public string? Namespace { get; }
+	public IReadOnlyList<CommandAliasDescriptor> Aliases { get; }
+	public IReadOnlyList<string> Examples { get; }
+	public string? IntroducedVersion { get; }
+	public CommandDeprecation? Deprecation { get; }
+	public IntrinsicPrimaryShape? IntrinsicPrimaryShape { get; }
+	public IReadOnlyList<IntrinsicSignatureDescriptor> IntrinsicSignatures { get; }
 }
 
 public sealed class IntrinsicDescriptor
 {
-	internal IntrinsicDescriptor(SymbolId id, string name, string description)
+	internal IntrinsicDescriptor(SymbolId id, IntrinsicSchema schema)
 	{
 		Id = id;
-		Name = name;
-		Description = description;
+		Name = schema.Name;
+		Description = schema.Description;
+		PrimaryShape = schema.PrimaryShape;
+		Signatures = schema.Signatures;
+		Kind = schema.Kind;
 	}
 	public SymbolId Id
 	{
@@ -478,6 +510,29 @@ public sealed class IntrinsicDescriptor
 	{
 		get;
 	}
+	public IntrinsicPrimaryShape PrimaryShape { get; }
+	public IReadOnlyList<IntrinsicSignatureDescriptor> Signatures { get; }
+	internal IntrinsicKind Kind { get; }
+}
+
+public enum IntrinsicPrimaryShape { Result, Array, NestedArray }
+public enum IntrinsicParameterRole { Value, ContextualExpression }
+public enum IntrinsicConstraintKind { None, Numeric, Equality, Ordering }
+public sealed record IntrinsicParameterDescriptor(string Name, string TypePattern, IntrinsicParameterRole Role);
+public sealed class IntrinsicSignatureDescriptor
+{
+	internal IntrinsicSignatureDescriptor(string primaryTypePattern, string resultTypePattern,
+		IEnumerable<IntrinsicParameterDescriptor> parameters, IntrinsicConstraintKind constraint)
+	{
+		PrimaryTypePattern = primaryTypePattern;
+		ResultTypePattern = resultTypePattern;
+		Parameters = Array.AsReadOnly(parameters.ToArray());
+		Constraint = constraint;
+	}
+	public string PrimaryTypePattern { get; }
+	public string ResultTypePattern { get; }
+	public IReadOnlyList<IntrinsicParameterDescriptor> Parameters { get; }
+	public IntrinsicConstraintKind Constraint { get; }
 }
 
 internal sealed class ShellArrayValue

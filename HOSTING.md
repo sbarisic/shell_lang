@@ -6,6 +6,8 @@ This document defines the C# host contract for ShellLang 0.1.
 
 `LANGUAGE.md` defines source syntax and language semantics. This document defines how a .NET host exposes types, values, and operations.
 
+`EVENTS.md` defines the deferred event subscription contract. The 0.1 assembly does not expose those event APIs.
+
 The terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** define conformance requirements.
 
 The API declarations in this document define the required public concepts. The implementation can add convenience overloads without changing their behavior.
@@ -54,6 +56,9 @@ public sealed class GlobalDescriptor;
 public sealed class MemberDescriptor;
 public sealed class QueryDescriptor;
 public sealed class CommandDescriptor;
+public sealed record CommandNamespaceDescriptor;
+public sealed record CommandAliasDescriptor;
+public sealed record CommandDeprecation;
 public sealed class InputPortDescriptor;
 public sealed class ArgumentDescriptor;
 public sealed class OutputPortDescriptor;
@@ -67,6 +72,8 @@ public sealed class HostFault;
 public sealed class ExecutionResult;
 public sealed class CompletionList;
 public sealed class HelpItem;
+public sealed class IntrinsicDescriptor;
+public sealed class IntrinsicSignatureDescriptor;
 ```
 
 Descriptors MUST be immutable after construction. A builder MAY provide mutable construction state before it creates a descriptor.
@@ -120,7 +127,7 @@ The engine MUST include core types and compiler intrinsics in every catalog. A h
 
 An engine instance MAY compile scripts for several sessions. Descriptors are shared across those sessions.
 
-A `DescriptorSet` can contain types, globals, commands, and runtime fault descriptors. The engine validates their references as one atomic set.
+A `DescriptorSet` can contain types, globals, command namespaces, commands, and runtime fault descriptors. The engine validates their references as one atomic set.
 
 ### 4.1 Value formatting
 
@@ -450,7 +457,14 @@ public sealed class CommandDescriptor
 {
     public SymbolId Id { get; }
     public string Name { get; }
+    public string QualifiedName { get; }
     public string Description { get; }
+    public string? Namespace { get; }
+    public string? Category { get; }
+    public IReadOnlyList<string> Examples { get; }
+    public IReadOnlyList<CommandAliasDescriptor> Aliases { get; }
+    public string? IntroducedVersion { get; }
+    public CommandDeprecation? Deprecation { get; }
     public IReadOnlyList<InputPortDescriptor> Inputs { get; }
     public IReadOnlyList<ArgumentDescriptor> Arguments { get; }
     public IReadOnlyList<OutputPortDescriptor> Outputs { get; }
@@ -460,9 +474,15 @@ public sealed class CommandDescriptor
 }
 ```
 
-Command names MUST be unique. Host commands are monomorphic in version 0.1.
+`Name` is the leaf name. `QualifiedName` is `namespace::name` when a namespace is present and otherwise equals `Name`. A `CommandNamespaceDescriptor` registers one immutable namespace name and description. Nested names use `::`, and every parent namespace MUST already exist or be present in the same atomic registration.
+
+Canonical names and aliases MUST be globally unique against all callable spellings, compiler intrinsics, constructible types, and core conversions. Commands in different namespaces can share a leaf name. Aliases can be flat or qualified and resolve to the canonical descriptor and `SymbolId`. Categories are display metadata and do not participate in name resolution.
+
+`CommandDeprecation` contains a message, introduction version, and optional replacement spelling. A canonical name or alias can carry deprecation independently. `Examples`, aliases, and all other descriptor collections are immutable. Host commands are monomorphic in version 0.1.
 
 Generic compiler intrinsics use internal type schemas. A host cannot register a generic command descriptor.
+
+`CommandBuilder.Namespace`, `Category`, `Example`, `Alias`, `IntroducedIn`, and `Deprecated` populate the corresponding immutable discovery metadata. These methods do not change port typing or invocation behavior.
 
 ### 10.2 InputPortDescriptor
 
@@ -777,6 +797,8 @@ All compiler diagnostics and runtime faults MUST identify a source span when sou
 
 `CompilationDiagnostic.ContextType` is nullable. Within a contextual expression it reports the exact effective static type of `this`; outside such a scope it is null.
 
+`CompilationDiagnostic.Severity` is `Error`, `Warning`, or `Information`. `ShellCompilation.IsValid` depends only on error diagnostics. Warning `SL2601` reports a deprecated canonical command or alias and stores the canonical qualified name in `SymbolName`; the bound program remains executable.
+
 ### 15.3 Diagnostic groups
 
 Stable diagnostic codes use these groups:
@@ -913,11 +935,13 @@ The engine MUST expose descriptors and compiler intrinsics through one read-only
 - Declared runtime fault codes and descriptions
 - Members or enum values when applicable
 - Nullable `ContextType`
+- Canonical qualified command name, namespace, category, aliases, examples, introduction version, and structured deprecation
+- Intrinsic signatures, type patterns, contextual parameter roles, and numeric, equality, or ordering constraints
 
 `GetCompletions` MUST use the parser and static context. It SHOULD suggest:
 
 - Visible session bindings and globals
-- Commands compatible with the current pipeline type
+- Canonical qualified commands compatible with the current pipeline type, including namespace-prefix filtering
 - Valid ports and arguments
 - Registered members for the receiver type
 - Contextual enum members
@@ -926,7 +950,9 @@ The engine MUST expose descriptors and compiler intrinsics through one read-only
 - Constructible nominal types and constructor signatures in expression position, but not pipeline-stage position
 - Core conversion signatures, host type-scoped values, and synthesized enum `values`
 
-A completion item contains a replacement span, insertion text, symbol kind, display type, and short description. `CompletionItemKind.Context` identifies the `this` suggestion. Command help reports the declared default-input context, query help reports its receiver context, and type help reports constructor arguments, defaults, output, declared error, scoped values, and conversions. `GetTypeHelp(ShellTypeId)` also returns help for core types that do not have registered symbol identities.
+A completion item contains a replacement span, insertion text, symbol kind, display type, short description, optional canonical name and category, and a deprecation annotation. Aliases do not appear as preferred completion entries. `CompletionItemKind.Context` identifies the `this` suggestion. Command help reports the declared default-input context, query help reports its receiver context, and type help reports constructor arguments, defaults, output, declared error, scoped values, and conversions. `GetTypeHelp(ShellTypeId)` also returns help for core types that do not have registered symbol identities.
+
+Every intrinsic is backed by one immutable engine schema that defines its name, description, primary shape, generic type-pattern signatures, parameters, contextual roles, constraints, binding strategy, and evaluator handler. `IntrinsicDescriptor` exposes the read-only public projection. Binding, applicability diagnostics, help, completion, and runtime dispatch MUST use the same schema entry.
 
 The host can build `help`, autocomplete, and editor features without executing a command.
 

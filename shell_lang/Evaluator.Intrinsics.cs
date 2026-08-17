@@ -4,89 +4,92 @@ internal sealed partial class Evaluator
 {
 	private EvalOutcome InvokeIntrinsic(BoundIntrinsicOperation operation, ShellValue primary,
 		IReadOnlyDictionary<string, ShellValue> arguments, IReadOnlyList<int> path)
-	{
-		if (operation.Intrinsic is IntrinsicKind.Require or IntrinsicKind.ValueOr or IntrinsicKind.Error or IntrinsicKind.IsOk)
-			return InvokeResultIntrinsic(operation, primary, arguments);
-		var array = (ShellArrayValue)primary.Value;
-		switch (operation.Intrinsic)
-		{
-			case IntrinsicKind.Count:
-				return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Int32, array.Items.Count));
-			case IntrinsicKind.Take:
-				var count = arguments["count"].Get<int>();
-				if (count < 0)
-					return CoreFault("SL4004", "take count cannot be negative.", operation.Span);
-				return EvalOutcome.Success(new ShellValue(primary.Type, new ShellArrayValue(array.Items.Take(count))));
-			case IntrinsicKind.Skip:
-				count = arguments["count"].Get<int>();
-				if (count < 0)
-					return CoreFault("SL4004", "skip count cannot be negative.", operation.Span);
-				return EvalOutcome.Success(new ShellValue(primary.Type, new ShellArrayValue(array.Items.Skip(count))));
-			case IntrinsicKind.At:
-				return At(operation, array, arguments["index"].Get<int>());
-			case IntrinsicKind.Slice:
-				return Slice(operation, primary, array, arguments["start"].Get<int>(), arguments["count"].Get<int>());
-			case IntrinsicKind.First:
-				return EmptyOrValue(operation, array, array.Items.FirstOrDefault());
-			case IntrinsicKind.Last:
-				return EmptyOrValue(operation, array, array.Items.LastOrDefault());
-			case IntrinsicKind.Single:
-				return Single(operation, array);
-			case IntrinsicKind.Reverse:
-				return EvalOutcome.Success(new ShellValue(primary.Type, new ShellArrayValue(array.Items.Reverse())));
-			case IntrinsicKind.Concat:
-				var other = (ShellArrayValue)arguments["other"].Value;
-				return EvalOutcome.Success(new ShellValue(primary.Type, new ShellArrayValue(array.Items.Concat(other.Items))));
-			case IntrinsicKind.Contains:
-				return Contains(operation, primary, array, arguments["value"]);
-			case IntrinsicKind.Distinct when operation.ContextExpression is null:
-				return Distinct(operation, primary, array);
-			case IntrinsicKind.Min:
-				return EmptyOrValue(operation, array, Extreme(array, false, operation.Span));
-			case IntrinsicKind.Max:
-				return EmptyOrValue(operation, array, Extreme(array, true, operation.Span));
-			case IntrinsicKind.Sum:
-				try
-				{
-					return EvalOutcome.Success(Sum(array, _engine.GetTypeEntry(primary.Type).ElementType!.Value));
-				}
-				catch (OverflowException) { return CoreFault("SL4002", "Integer overflow in sum.", operation.Span); }
-			case IntrinsicKind.Average:
-				return Average(operation, array);
-			case IntrinsicKind.Where:
-				return ContextWhere(operation, primary, array, path);
-			case IntrinsicKind.Sort:
-				return ContextSort(operation, primary, array, path);
-			case IntrinsicKind.Any:
-				return ContextBoolean(operation, array, path, any: true);
-			case IntrinsicKind.All:
-				return ContextBoolean(operation, array, path, any: false);
-			case IntrinsicKind.Select:
-				return ContextSelect(operation, array, path);
-			case IntrinsicKind.Distinct:
-				return ContextDistinct(operation, primary, array, path);
-			default:
-				return EvalOutcome.Host(new HostFault("SL5112", "Unknown intrinsic.", operation.Span));
-		}
-	}
+		=> ShellEngine.IntrinsicSchemasByKind[operation.Intrinsic].Evaluator(this, operation, primary, arguments, path);
 
-	private EvalOutcome InvokeResultIntrinsic(BoundIntrinsicOperation operation, ShellValue primary, IReadOnlyDictionary<string, ShellValue> arguments)
+	internal static IntrinsicEvaluatorHandler CreateIntrinsicHandler(IntrinsicKind kind) => kind switch
+	{
+		IntrinsicKind.Require => static (e, o, p, _, _) => e.Require(o, p),
+		IntrinsicKind.ValueOr => static (_, _, p, a, _) => ValueOr(p, a["default"]),
+		IntrinsicKind.Error => static (e, o, p, _, _) => e.Error(o, p),
+		IntrinsicKind.IsOk => static (e, _, p, _, _) => e.IsOk(p),
+		IntrinsicKind.Count => static (e, _, p, _, _) => e.Count(p),
+		IntrinsicKind.Take => static (e, o, p, a, _) => e.TakeOrSkip(o, p, a["count"].Get<int>(), true),
+		IntrinsicKind.Skip => static (e, o, p, a, _) => e.TakeOrSkip(o, p, a["count"].Get<int>(), false),
+		IntrinsicKind.At => static (e, o, p, a, _) => e.At(o, (ShellArrayValue)p.Value, a["index"].Get<int>()),
+		IntrinsicKind.Slice => static (e, o, p, a, _) => e.Slice(o, p, (ShellArrayValue)p.Value,
+			a["start"].Get<int>(), a["count"].Get<int>()),
+		IntrinsicKind.First => static (e, o, p, _, _) => e.EmptyOrValue(o, (ShellArrayValue)p.Value,
+			((ShellArrayValue)p.Value).Items.FirstOrDefault()),
+		IntrinsicKind.Last => static (e, o, p, _, _) => e.EmptyOrValue(o, (ShellArrayValue)p.Value,
+			((ShellArrayValue)p.Value).Items.LastOrDefault()),
+		IntrinsicKind.Single => static (e, o, p, _, _) => e.Single(o, (ShellArrayValue)p.Value),
+		IntrinsicKind.Reverse => static (_, _, p, _, _) => EvalOutcome.Success(new ShellValue(p.Type,
+			new ShellArrayValue(((ShellArrayValue)p.Value).Items.Reverse()))),
+		IntrinsicKind.Flatten => static (_, o, p, _, _) => EvalOutcome.Success(new ShellValue(o.DirectOutput,
+			new ShellArrayValue(((ShellArrayValue)p.Value).Items.SelectMany(item => ((ShellArrayValue)item.Value).Items)))),
+		IntrinsicKind.Concat => static (_, _, p, a, _) => EvalOutcome.Success(new ShellValue(p.Type,
+			new ShellArrayValue(((ShellArrayValue)p.Value).Items.Concat(((ShellArrayValue)a["other"].Value).Items)))),
+		IntrinsicKind.Contains => static (e, o, p, a, _) => e.Contains(o, p, (ShellArrayValue)p.Value, a["value"]),
+		IntrinsicKind.Distinct => static (e, o, p, _, path) => o.ContextExpression is null
+			? e.Distinct(o, p, (ShellArrayValue)p.Value)
+			: e.ContextDistinct(o, p, (ShellArrayValue)p.Value, path),
+		IntrinsicKind.Min => static (e, o, p, _, _) => e.EmptyOrValue(o, (ShellArrayValue)p.Value,
+			e.Extreme((ShellArrayValue)p.Value, false, o.Span)),
+		IntrinsicKind.Max => static (e, o, p, _, _) => e.EmptyOrValue(o, (ShellArrayValue)p.Value,
+			e.Extreme((ShellArrayValue)p.Value, true, o.Span)),
+		IntrinsicKind.Sum => static (e, o, p, _, _) => e.InvokeSum(o, p),
+		IntrinsicKind.Average => static (e, o, p, _, _) => e.Average(o, (ShellArrayValue)p.Value),
+		IntrinsicKind.Where => static (e, o, p, _, path) => e.ContextWhere(o, p, (ShellArrayValue)p.Value, path),
+		IntrinsicKind.Sort => static (e, o, p, _, path) => e.ContextSort(o, p, (ShellArrayValue)p.Value, path),
+		IntrinsicKind.Any => static (e, o, p, _, path) => e.ContextBoolean(o, (ShellArrayValue)p.Value, path, true),
+		IntrinsicKind.All => static (e, o, p, _, path) => e.ContextBoolean(o, (ShellArrayValue)p.Value, path, false),
+		IntrinsicKind.Select => static (e, o, p, _, path) => e.ContextSelect(o, (ShellArrayValue)p.Value, path),
+		_ => throw new ArgumentOutOfRangeException(nameof(kind))
+	};
+
+	private EvalOutcome IsOk(ShellValue primary) => EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool,
+		primary.Value is not ShellResultValue.Error));
+
+	private EvalOutcome Require(BoundIntrinsicOperation operation, ShellValue primary)
 	{
 		var result = (ShellResultValue)primary.Value;
-		switch (operation.Intrinsic)
+		if (result is ShellResultValue.Error error)
+			return CoreFault("SL4001", error.Value.ToString(), operation.Span);
+		return result is ShellResultValue.VoidSuccess
+			? EvalOutcome.Success(null)
+			: EvalOutcome.Success(((ShellResultValue.Success)result).Value);
+	}
+
+	private static EvalOutcome ValueOr(ShellValue primary, ShellValue defaultValue) => EvalOutcome.Success(
+		primary.Value is ShellResultValue.Error ? defaultValue : ((ShellResultValue.Success)primary.Value).Value);
+
+	private EvalOutcome Error(BoundIntrinsicOperation operation, ShellValue primary) =>
+		primary.Value is ShellResultValue.Error error
+			? EvalOutcome.Success(error.Value)
+			: CoreFault("SL4005", "error requires an Err value.", operation.Span);
+
+	private EvalOutcome Count(ShellValue primary) => EvalOutcome.Success(_engine.CreateValue(_engine.Core.Int32,
+		((ShellArrayValue)primary.Value).Items.Count));
+
+	private EvalOutcome TakeOrSkip(BoundIntrinsicOperation operation, ShellValue primary, int count, bool take)
+	{
+		if (count < 0)
+			return CoreFault("SL4004", $"{(take ? "take" : "skip")} count cannot be negative.", operation.Span);
+		var items = ((ShellArrayValue)primary.Value).Items;
+		return EvalOutcome.Success(new ShellValue(primary.Type,
+			new ShellArrayValue(take ? items.Take(count) : items.Skip(count))));
+	}
+
+	private EvalOutcome InvokeSum(BoundIntrinsicOperation operation, ShellValue primary)
+	{
+		try
 		{
-			case IntrinsicKind.IsOk:
-				return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, result is not ShellResultValue.Error));
-			case IntrinsicKind.Require:
-				if (result is ShellResultValue.Error error)
-					return CoreFault("SL4001", error.Value.ToString(), operation.Span);
-				return result is ShellResultValue.VoidSuccess ? EvalOutcome.Success(null) : EvalOutcome.Success(((ShellResultValue.Success)result).Value);
-			case IntrinsicKind.ValueOr:
-				return EvalOutcome.Success(result is ShellResultValue.Error ? arguments["default"] : ((ShellResultValue.Success)result).Value);
-			case IntrinsicKind.Error:
-				return result is ShellResultValue.Error e ? EvalOutcome.Success(e.Value) : CoreFault("SL4005", "error requires an Err value.", operation.Span);
-			default:
-				throw new InvalidOperationException();
+			return EvalOutcome.Success(Sum((ShellArrayValue)primary.Value,
+				_engine.GetTypeEntry(primary.Type).ElementType!.Value));
+		}
+		catch (OverflowException)
+		{
+			return CoreFault("SL4002", "Integer overflow in sum.", operation.Span);
 		}
 	}
 

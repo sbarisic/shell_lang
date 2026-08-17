@@ -311,7 +311,7 @@ internal sealed partial class Binder
 			return ErrorExpression("SL2502", $"Type call '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
 		if (ShellEngine.IntrinsicNames.Contains(syntax.Name))
 			return BindIntrinsic(syntax.Name, [], primary, syntax.Span);
-		if (!_engine.Commands.TryGetValue(syntax.Name, out var command))
+		if (!TryResolveCommand(syntax.Name, syntax.Span, out var command))
 			return ErrorExpression("SL2202", $"Unknown command or intrinsic '{syntax.Name}'.", syntax.Span);
 		return BindCommand(command, [], primary, syntax.Span);
 	}
@@ -328,9 +328,27 @@ internal sealed partial class Binder
 		}
 		if (ShellEngine.IntrinsicNames.Contains(syntax.Name))
 			return BindIntrinsic(syntax.Name, syntax.Entries, primary, syntax.Span);
-		if (!_engine.Commands.TryGetValue(syntax.Name, out var command))
+		if (!TryResolveCommand(syntax.Name, syntax.Span, out var command))
 			return ErrorExpression("SL2202", $"Unknown command '{syntax.Name}'.", syntax.Span);
 		return BindCommand(command, syntax.Entries, primary, syntax.Span);
+	}
+
+	private bool TryResolveCommand(string name, SourceSpan span, out CommandDescriptor command)
+	{
+		if (!_engine.TryGetCommand(name, out var callable))
+		{
+			command = null!;
+			return false;
+		}
+		command = callable.Command;
+		if (callable.Deprecation is { } deprecation)
+		{
+			var replacement = deprecation.Replacement ?? command.QualifiedName;
+			_diagnostics.Add(new CompilationDiagnostic("SL2601",
+				$"Command spelling '{name}' is deprecated: {deprecation.Message} Use '{replacement}'.",
+				span, symbolName: command.QualifiedName, severity: DiagnosticSeverity.Warning));
+		}
+		return true;
 	}
 
 	private BoundExpression BindCommand(CommandDescriptor command, IReadOnlyList<InvocationEntrySyntax> entries,

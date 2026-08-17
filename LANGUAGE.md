@@ -10,6 +10,8 @@ The terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** define conformance req
 
 An implementation conforms to ShellLang 0.1 when it follows this document and the hosting rules in `HOSTING.md`.
 
+`EVENTS.md` specifies a future long-lived subscription model. Event sources and event pipelines are not part of the executable 0.1 language.
+
 ## 2. Core model
 
 Every ShellLang value has a static type. A command has typed input ports, arguments, and output ports.
@@ -164,7 +166,7 @@ expression          = pipeline_expression ;
 pipeline_expression = logical_or_expression,
                       { "->", pipeline_stage } ;
 
-pipeline_stage      = ( identifier | invocation ),
+pipeline_stage      = ( callable_name | invocation ),
                       { member_suffix } ;
 
 logical_or_expression
@@ -201,7 +203,8 @@ literal             = boolean_literal
 
 contextual_member   = ".", identifier, [ member_arguments ] ;
 
-invocation          = identifier, "(", [ invocation_entries ], ")" ;
+callable_name       = identifier, { "::", identifier } ;
+invocation          = callable_name, "(", [ invocation_entries ], ")" ;
 invocation_entries  = invocation_entry, { ",", invocation_entry }, [ "," ] ;
 invocation_entry    = explicit_input
                     | named_argument
@@ -224,6 +227,8 @@ A pipeline stage can omit `()` only when the command or intrinsic has no supplie
 
 A command used without a pipeline source MUST use invocation syntax. A zero-input command therefore uses `command()`.
 
+`::` is valid only for command resolution in a direct invocation or pipeline stage. Types, values, globals, and members do not use command namespace qualification.
+
 The lexer supplies the `boolean_literal`, `integer_literal`, `fractional_literal`, and `string_literal` terminals described in Section 3. The binder permits `this` and `contextual_member` only where an effective contextual value exists. A leading `.member` is shorthand for `this.member`.
 
 ## 5. Names and assignments
@@ -244,9 +249,11 @@ A type name resolves in a type context, as the left side of a type-scoped value,
 DamageType.Fire
 ```
 
-Command names MUST be unique. ShellLang 0.1 does not support command overloads.
+The canonical identity of a command is `namespace::name`, or its leaf name when it has no namespace. Canonical callable spellings and aliases MUST be globally unique. Commands in different namespaces can share a leaf name. A qualified command resolves only in direct-call or pipeline-stage position and is independent of same-spelled bindings, globals, types, and members.
 
 Compiler intrinsics also have unique names. A host cannot register a command with an intrinsic name.
+
+An alias resolves to its canonical command and symbol identity. A deprecated canonical spelling or alias produces warning `SL2601` with the canonical qualified name. Warnings do not invalidate a compilation and do not prevent execution.
 
 ### 5.2 Assignment
 
@@ -751,7 +758,7 @@ A nominal host type can declare one constructor. `TypeName(...)` invokes it as a
 ```shelllang
 point = Vector3(1, 2, 3)
 transform = Transform(point, Quaternion(), Vector3(1, 1, 1))
-transform.position.y -> print
+transform.position.y -> system::print
 ```
 
 Constructors cannot be pipeline stages and do not accept `<-` entries. Arguments evaluate once in source order in the enclosing contextual scope, so nested constructors can reference `this`. The first argument `Err` propagates without invoking the constructor. A fallible constructor combines its declared error with argument errors by the nearest-common-error rule.
@@ -898,8 +905,8 @@ where<T>(Array<T>, predicate: T -> Bool) -> Array<T>
 The predicate can be positional or named:
 
 ```shelllang
-find_entities(classname: "info_spawn") -> where(.spawn_order > 1)
-find_entities(classname: "info_spawn") -> where(predicate: .spawn_order > 1)
+map::find_entities(classname: "info_spawn") -> where(.spawn_order > 1)
+map::find_entities(classname: "info_spawn") -> where(predicate: .spawn_order > 1)
 ```
 
 `where` evaluates the predicate in input order. It preserves the order of accepted elements.
@@ -1062,11 +1069,23 @@ single<T>(Array<T>) -> Result<T, CollectionCardinalityError>
 
 `single` succeeds only when the array contains exactly one element. Otherwise its error records the actual count. Filtering remains explicit through `where`; `single` has no predicate form.
 
-### 12.17 Intrinsic argument rules
+### 12.17 flatten
+
+```text
+flatten<T>(Array<Array<T>>) -> Array<T>
+```
+
+`flatten` removes exactly one array layer. It creates a new immutable array, visits the outer arrays in order, and preserves each inner array's order. Empty outer or inner arrays contribute no elements. The output retains the declared inner element type, including when inner arrays contain more-derived values. A three-level array becomes a two-level array; `flatten` never recurses.
+
+An outer Result or default output is adapted before the intrinsic runs and is propagated normally. A scalar array is a static error.
+
+### 12.18 Intrinsic argument rules
 
 Intrinsic arguments can be positional or named. Positional arguments MUST precede named arguments. Unknown names, duplicate arguments, missing required arguments, and explicit input syntax are static errors.
 
 Collection intrinsics accept arrays reached through Result propagation or default-output projection. A fallible contextual output and an outer Result combine their error types by the standard nearest-common-error rule.
+
+All compiler intrinsics are defined by one immutable descriptor schema. The same signatures, parameter roles, primary shapes, and constraints drive binding, applicability, diagnostics, help, completion, and runtime dispatch metadata. The catalog exposes a read-only projection of this schema.
 
 ## 13. Program execution
 

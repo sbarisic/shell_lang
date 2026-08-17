@@ -14,8 +14,11 @@ public sealed partial class ShellEngine
 	internal List<ErrorTypeDescriptor> Errors { get; } = [];
 	internal Dictionary<string, GlobalDescriptor> Globals { get; } = new(StringComparer.Ordinal);
 	internal Dictionary<string, CommandDescriptor> Commands { get; } = new(StringComparer.Ordinal);
+	internal Dictionary<string, CommandNamespaceDescriptor> CommandNamespaces { get; } = new(StringComparer.Ordinal);
+	internal Dictionary<string, CommandCallable> CommandCallables { get; } = new(StringComparer.Ordinal);
 	internal Dictionary<string, RuntimeFaultDescriptor> RuntimeFaults { get; } = new(StringComparer.Ordinal);
 	internal Dictionary<string, IntrinsicDescriptor> Intrinsics { get; } = new(StringComparer.Ordinal);
+	internal bool TryGetCommand(string name, out CommandCallable callable) => CommandCallables.TryGetValue(name, out callable!);
 	private SymbolId NextSymbol(object value)
 	{
 		var id = new SymbolId(Interlocked.Increment(ref _nextSymbol));
@@ -79,13 +82,13 @@ public sealed partial class ShellEngine
 			CollectionCardinalityError = cardinality,
 			ConversionError = conversion
 		};
-		foreach (var name in IntrinsicNames)
+		foreach (var schema in IntrinsicSchemas.Values)
 		{
-			var placeholder = new IntrinsicDescriptor(default, name, IntrinsicDescriptions[name]);
+			var placeholder = new IntrinsicDescriptor(default, schema);
 			var id = NextSymbol(placeholder);
-			var descriptor = new IntrinsicDescriptor(id, name, placeholder.Description);
+			var descriptor = new IntrinsicDescriptor(id, schema);
 			_symbols[id] = descriptor;
-			Intrinsics.Add(name, descriptor);
+			Intrinsics.Add(schema.Name, descriptor);
 		}
 	}
 
@@ -204,3 +207,5 @@ public sealed partial class ShellEngine
 		return symbol is null ? null : GetTypeEntry(symbol.DeclaringType);
 	}
 }
+
+internal sealed record CommandCallable(CommandDescriptor Command, CommandDeprecation? Deprecation, bool IsAlias);

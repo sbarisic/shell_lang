@@ -42,7 +42,7 @@ internal sealed record BoundPrimitiveOperation(TokenKind Operator, ShellTypeId E
 internal enum IntrinsicKind
 {
 	Require, ValueOr, Error, IsOk, Where, Sort, Take, Count, Sum, First, Min, Max, Average,
-	At, Last, Skip, Slice, Any, All, Select, Contains, Concat, Distinct, Reverse, Single
+	At, Last, Skip, Slice, Any, All, Select, Contains, Concat, Distinct, Reverse, Single, Flatten
 }
 internal sealed record BoundIntrinsicOperation(IntrinsicKind Intrinsic, ShellTypeId ExpectedInput,
 	ShellTypeId DirectOutput, SourceSpan Span, BoundExpression? ContextExpression = null,

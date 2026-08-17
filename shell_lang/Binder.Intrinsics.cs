@@ -6,20 +6,15 @@ internal sealed partial class Binder
 	{
 		if (primary is null)
 			return ErrorExpression("SL2401", $"Intrinsic '{name}' requires a pipeline input.", span);
+		var schema = ShellEngine.IntrinsicSchemas[name];
+		var kind = schema.Kind;
 		var entry = _engine.GetTypeEntry(primary.Type);
-		if (name is "require" or "value_or" or "error" or "is_ok")
+		if (schema.BindingStrategy == IntrinsicBindingStrategy.Result)
 		{
 			if (entry.Kind != ShellTypeKind.Result)
 				return ErrorExpression("SL2402", $"Intrinsic '{name}' requires Result<T,E>.", span);
 			var success = entry.SuccessType!.Value;
 			var error = entry.ErrorType!.Value;
-			var kind = name switch
-			{
-				"require" => IntrinsicKind.Require,
-				"value_or" => IntrinsicKind.ValueOr,
-				"error" => IntrinsicKind.Error,
-				_ => IntrinsicKind.IsOk
-			};
 			var resultOutput = kind switch
 			{
 				IntrinsicKind.Require or IntrinsicKind.ValueOr => success,
@@ -74,12 +69,13 @@ internal sealed partial class Binder
 				secondaries, finalOutput, span);
 		}
 
-		if (name is "where" or "sort" or "any" or "all" or "select" || (name == "distinct" && entries.Count != 0))
+		if (schema.BindingStrategy == IntrinsicBindingStrategy.ContextualElement &&
+			(kind != IntrinsicKind.Distinct || entries.Count != 0))
 		{
-			var parameter = name switch
+			var parameter = kind switch
 			{
-				"sort" or "distinct" => "by",
-				"select" => "selector",
+				IntrinsicKind.Sort or IntrinsicKind.Distinct => "by",
+				IntrinsicKind.Select => "selector",
 				_ => "predicate"
 			};
 			if (!TryMatchIntrinsicArguments(name, entries, [parameter], span, out var matched))
@@ -89,55 +85,46 @@ internal sealed partial class Binder
 			var contextual = InContext(contextScope, () => BindExpression(arg.Expression));
 			var contextualEntry = _engine.GetTypeEntry(contextual.Type);
 			var contextualValue = contextualEntry.Kind == ShellTypeKind.Result ? contextualEntry.SuccessType!.Value : contextual.Type;
-			if (name is "where" or "any" or "all" && contextualValue != _engine.Core.Bool)
+			if (kind is IntrinsicKind.Where or IntrinsicKind.Any or IntrinsicKind.All && contextualValue != _engine.Core.Bool)
 				Error("SL2409", $"{name} predicate must produce Bool or Result<Bool,E>.", contextual.Span);
-			if (name == "sort" && !HasOrdering(contextualValue))
+			if (kind == IntrinsicKind.Sort && !HasOrdering(contextualValue))
 				Error("SL2410", "sort key must have registered ordering.", contextual.Span);
-			if (name == "distinct" && !HasEquality(contextualValue))
+			if (kind == IntrinsicKind.Distinct && !HasEquality(contextualValue))
 				Error("SL2425", "distinct key must have registered equality.", contextual.Span);
-			if (name == "select" && contextualValue == _engine.Core.Void)
+			if (kind == IntrinsicKind.Select && contextualValue == _engine.Core.Void)
 				Error("SL2424", "select selector cannot produce Void.", contextual.Span);
 
-			var directOutput = name switch
+			var directOutput = kind switch
 			{
-				"any" or "all" => _engine.Core.Bool,
-				"select" => _engine.ArrayOf(contextualValue == _engine.Core.Void ? _engine.Core.Any : contextualValue),
+				IntrinsicKind.Any or IntrinsicKind.All => _engine.Core.Bool,
+				IntrinsicKind.Select => _engine.ArrayOf(contextualValue == _engine.Core.Void ? _engine.Core.Any : contextualValue),
 				_ => collectionType.Value
 			};
 			if (contextualEntry.Kind == ShellTypeKind.Result)
 				directOutput = _engine.ResultOf(directOutput, contextualEntry.ErrorType!.Value);
-			var kind = name switch
-			{
-				"where" => IntrinsicKind.Where,
-				"sort" => IntrinsicKind.Sort,
-				"any" => IntrinsicKind.Any,
-				"all" => IntrinsicKind.All,
-				"select" => IntrinsicKind.Select,
-				_ => IntrinsicKind.Distinct
-			};
 			var primaryPlan = BuildAdaptation(primary.Type, collectionType.Value, false, span, directOutput);
 			var contextualOperation = new BoundIntrinsicOperation(kind, collectionType.Value, directOutput, span,
 				contextual, contextScope.Id);
 			return new BoundApplyExpression(primary, contextualOperation, primaryPlan, [], primaryPlan.OutputType, span);
 		}
 
-		if (name is "take" or "skip")
+		if (kind is IntrinsicKind.Take or IntrinsicKind.Skip)
 		{
 			var secondaries = BindIntrinsicValueArguments(name, entries, [("count", _engine.Core.Int32)], span, collectionScope);
 			if (secondaries is null)
 				return new BoundErrorExpression(_engine.Core.Any, span);
 			if (IsNegativeInt32Literal(secondaries[0].Expression))
 				Error("SL2412", $"A literal {name} count cannot be negative.", secondaries[0].Span);
-			return Apply(name == "take" ? IntrinsicKind.Take : IntrinsicKind.Skip, collectionType.Value, secondaries);
+			return Apply(kind, collectionType.Value, secondaries);
 		}
 
-		if (name == "at")
+		if (kind == IntrinsicKind.At)
 		{
 			var secondaries = BindIntrinsicValueArguments(name, entries, [("index", _engine.Core.Int32)], span, collectionScope);
 			return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.At, element, secondaries);
 		}
 
-		if (name == "slice")
+		if (kind == IntrinsicKind.Slice)
 		{
 			var secondaries = BindIntrinsicValueArguments(name, entries,
 				[("start", _engine.Core.Int32), ("count", _engine.Core.Int32)], span, collectionScope);
@@ -149,7 +136,7 @@ internal sealed partial class Binder
 			return Apply(IntrinsicKind.Slice, collectionType.Value, secondaries);
 		}
 
-		if (name == "contains")
+		if (kind == IntrinsicKind.Contains)
 		{
 			if (!HasEquality(element))
 				Error("SL2425", "contains requires elements with registered equality.", span);
@@ -157,7 +144,7 @@ internal sealed partial class Binder
 			return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.Contains, _engine.Core.Bool, secondaries);
 		}
 
-		if (name == "concat")
+		if (kind == IntrinsicKind.Concat)
 		{
 			var secondaries = BindIntrinsicValueArguments(name, entries, [("other", collectionType.Value)], span, collectionScope);
 			return secondaries is null ? new BoundErrorExpression(_engine.Core.Any, span) : Apply(IntrinsicKind.Concat, collectionType.Value, secondaries);
@@ -168,65 +155,60 @@ internal sealed partial class Binder
 			Error("SL2405", $"Intrinsic '{name}' takes no arguments.", span);
 			return new BoundErrorExpression(_engine.Core.Any, span);
 		}
-		IntrinsicKind intrinsic;
 		ShellTypeId output;
-		switch (name)
+		switch (kind)
 		{
-			case "count":
-				intrinsic = IntrinsicKind.Count;
+			case IntrinsicKind.Count:
 				output = _engine.Core.Int32;
 				break;
-			case "first":
-				intrinsic = IntrinsicKind.First;
+			case IntrinsicKind.First:
 				output = _engine.ResultOf(element, _engine.Core.EmptyCollectionError);
 				break;
-			case "last":
-				intrinsic = IntrinsicKind.Last;
+			case IntrinsicKind.Last:
 				output = _engine.ResultOf(element, _engine.Core.EmptyCollectionError);
 				break;
-			case "reverse":
-				intrinsic = IntrinsicKind.Reverse;
+			case IntrinsicKind.Reverse:
 				output = collectionType.Value;
 				break;
-			case "single":
-				intrinsic = IntrinsicKind.Single;
+			case IntrinsicKind.Single:
 				output = _engine.ResultOf(element, _engine.Core.CollectionCardinalityError);
 				break;
-			case "distinct":
-				intrinsic = IntrinsicKind.Distinct;
+			case IntrinsicKind.Distinct:
 				output = collectionType.Value;
 				if (!HasEquality(element))
 					Error("SL2425", "distinct requires elements with registered equality.", span);
 				break;
-			case "sum":
-				intrinsic = IntrinsicKind.Sum;
+			case IntrinsicKind.Sum:
 				output = element;
 				if (!IsNumeric(element))
 					Error("SL2413", "sum requires a numeric array.", span);
 				break;
-			case "min":
-				intrinsic = IntrinsicKind.Min;
+			case IntrinsicKind.Min:
 				output = _engine.ResultOf(element, _engine.Core.EmptyCollectionError);
 				if (!HasOrdering(element))
 					Error("SL2414", "min requires ordered elements.", span);
 				break;
-			case "max":
-				intrinsic = IntrinsicKind.Max;
+			case IntrinsicKind.Max:
 				output = _engine.ResultOf(element, _engine.Core.EmptyCollectionError);
 				if (!HasOrdering(element))
 					Error("SL2414", "max requires ordered elements.", span);
 				break;
-			case "average":
-				intrinsic = IntrinsicKind.Average;
+			case IntrinsicKind.Average:
 				var averageType = IsInteger(element) ? _engine.Core.Float64 : element;
 				output = _engine.ResultOf(averageType, _engine.Core.EmptyCollectionError);
 				if (!IsNumeric(element))
 					Error("SL2415", "average requires numeric elements.", span);
 				break;
+			case IntrinsicKind.Flatten:
+				var nested = _engine.GetTypeEntry(element);
+				if (nested.Kind != ShellTypeKind.Array)
+					return ErrorExpression("SL2426", "flatten requires Array<Array<T>>.", span);
+				output = _engine.ArrayOf(nested.ElementType!.Value);
+				break;
 			default:
 				return ErrorExpression("SL2400", $"Unknown intrinsic '{name}'.", span);
 		}
-		var operation = new BoundIntrinsicOperation(intrinsic, collectionType.Value, output, span);
+		var operation = new BoundIntrinsicOperation(kind, collectionType.Value, output, span);
 		var adaptation = BuildAdaptation(primary.Type, collectionType.Value, false, span, output);
 		return new BoundApplyExpression(primary, operation, adaptation, [], adaptation.OutputType, span);
 	}
