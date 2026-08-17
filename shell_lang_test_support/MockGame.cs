@@ -143,17 +143,17 @@ internal sealed class MockGame
             Host<Camera>("Camera"), Host<Loot>("Loot"), Host<AmbientEmitter>("AmbientEmitter"), Host<WeatherProfile>("WeatherProfile")
         };
 
-		var errors = new List<ErrorTypeDescriptor>();
-		foreach (var (name, parent) in new[]
-		{
-			("GameError", (string?)null), ("WorldError", "GameError"), ("MapError", "GameError"),
-			("NavigationError", "MapError"), ("SpawnError", "MapError"), ("EncounterError", "GameError"),
-			("PlayerError", "GameError"), ("InventoryError", "PlayerError"), ("ObjectiveError", "GameError"),
-			("UIError", "GameError"), ("AudioError", "GameError"), ("TelemetryError", "GameError")
-		})
-		{
-			var descriptor = new ErrorTypeDescriptor(name, $"{name} value.", typeof(GameFailure), new ValueAdapter<GameFailure>(),
-				parent is null ? core.Error : _errors[parent]);
+        var errors = new List<ErrorTypeDescriptor>();
+        foreach (var (name, parent) in new[]
+        {
+            ("GameError", (string?)null), ("WorldError", "GameError"), ("MapError", "GameError"),
+            ("NavigationError", "MapError"), ("SpawnError", "MapError"), ("EncounterError", "GameError"),
+            ("PlayerError", "GameError"), ("InventoryError", "PlayerError"), ("ObjectiveError", "GameError"),
+            ("UIError", "GameError"), ("AudioError", "GameError"), ("TelemetryError", "GameError")
+        })
+        {
+            var descriptor = new ErrorTypeDescriptor(name, $"{name} value.", typeof(GameFailure), new ValueAdapter<GameFailure>(),
+                parent is null ? core.Error : _errors[parent]);
             _errors[name] = descriptor.Id;
             errors.Add(descriptor);
         }
