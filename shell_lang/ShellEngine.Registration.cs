@@ -48,6 +48,7 @@ public sealed partial class ShellEngine
 				if (!available.Contains(b))
 					d.Add(new("SL3005", $"Type '{type.Name}' has unknown base {b}."));
 			ValidateLocalNames(type.Name, type.Members.Select(x => x.Name).Concat(type.Queries.Select(x => x.Name)), d);
+			ValidateScopedValueNames(type.Name, type.TypeValues.Select(x => x.Name), d);
 			foreach (var member in type.Members)
 			{
 				Name(member.Name, "member");
@@ -99,6 +100,17 @@ public sealed partial class ShellEngine
 					(_typeEntries.TryGetValue(constructorError, out var constructorErrorEntry) && constructorErrorEntry.Kind == ShellTypeKind.Error)))
 					d.Add(new("SL3017", $"Constructor '{type.Name}' has a non-error ErrorType."));
 			}
+			foreach (var value in type.TypeValues)
+			{
+				Name(value.Name, "type-scoped value");
+				if (string.IsNullOrWhiteSpace(value.Description))
+					d.Add(new("SL3003", $"Type value '{type.Name}.{value.Name}' needs a description."));
+				if (!IsKnownTypeReference(value.ValueType, available))
+					d.Add(new("SL3005", $"Type value '{type.Name}.{value.Name}' has unknown type."));
+				if (value.FixedValue is { } fixedValue &&
+					(!IsAssignableForRegistration(fixedValue.Type, value.ValueType, set) || !IsValidFixedValue(fixedValue, set)))
+					d.Add(new("SL3024", $"Type value '{type.Name}.{value.Name}' has an invalid fixed value."));
+			}
 		}
 		foreach (var type in set.Enums)
 		{
@@ -106,7 +118,11 @@ public sealed partial class ShellEngine
 				d.Add(new("SL3006", $"Enum '{type.Name}' has no members."));
 			ValidateLocalNames(type.Name, type.Members.Select(x => x.Name), d);
 			foreach (var member in type.Members)
+			{
 				Name(member.Name, "enum member");
+				if (member.Name == "values")
+					d.Add(new("SL3024", $"Enum '{type.Name}' cannot declare the reserved scoped value 'values'."));
+			}
 		}
 		foreach (var error in set.Errors)
 		{
@@ -120,6 +136,7 @@ public sealed partial class ShellEngine
 		var callableNames = new HashSet<string>(IntrinsicNames, StringComparer.Ordinal);
 		callableNames.UnionWith(Commands.Keys);
 		callableNames.UnionWith(Types.Where(x => x.Constructor is not null).Select(x => x.Name));
+		callableNames.UnionWith(_typeEntries.Values.Where(x => IsConversionTarget(x.Id)).Select(x => x.Name));
 		foreach (var type in set.Types.Where(x => x.Constructor is not null))
 			if (!callableNames.Add(type.Name))
 				d.Add(new("SL3023", $"Constructible type '{type.Name}' collides with an existing callable name."));
@@ -293,6 +310,45 @@ public sealed partial class ShellEngine
 		};
 	}
 
+	private static void ValidateScopedValueNames(string owner, IEnumerable<string> names,
+		List<HostingDiagnostic> diagnostics)
+	{
+		var seen = new HashSet<string>(StringComparer.Ordinal);
+		foreach (var name in names)
+			if (!seen.Add(name))
+				diagnostics.Add(new("SL3024", $"Duplicate type-scoped value '{owner}.{name}'."));
+	}
+
+	private bool IsValidFixedValue(ShellValue value, DescriptorSet pending)
+	{
+		if (_typeEntries.TryGetValue(value.Type, out var existing))
+			return existing.Adapter?.IsValid(value.Value) ?? existing.Kind switch
+			{
+				ShellTypeKind.Array => value.Value is ShellArrayValue,
+				ShellTypeKind.Result => value.Value is ShellResultValue,
+				ShellTypeKind.OutputRecord => value.Value is ShellOutputRecordValue,
+				_ => false
+			};
+		var host = pending.Types.FirstOrDefault(x => x.Id == value.Type);
+		if (host is not null)
+			return host.Adapter.IsValid(value.Value);
+		var @enum = pending.Enums.FirstOrDefault(x => x.Id == value.Type);
+		if (@enum is not null)
+			return @enum.Adapter.IsValid(value.Value);
+		var error = pending.Errors.FirstOrDefault(x => x.Id == value.Type);
+		return error is not null && error.Adapter.IsValid(value.Value);
+	}
+
+	private bool IsAssignableForRegistration(ShellTypeId actual, ShellTypeId expected, DescriptorSet pending)
+	{
+		if (actual == expected || expected == Core.Any)
+			return actual != Core.Void;
+		if (_typeEntries.ContainsKey(actual) && _typeEntries.ContainsKey(expected))
+			return IsAssignable(actual, expected);
+		var descriptors = pending.Types.ToDictionary(x => x.Id);
+		return IsNominalSubtype(actual, expected, descriptors);
+	}
+
 	private void ValidateTypeCycles(IReadOnlyList<TypeDescriptor> types, List<HostingDiagnostic> diagnostics)
 	{
 		var map = types.ToDictionary(x => x.Id, x => x.DirectBases);
@@ -373,7 +429,8 @@ public sealed partial class ShellEngine
 				ResolvedSymbols = resolvedSymbols[type.Id],
 				Equality = type.Equality,
 				Ordering = type.Ordering,
-				Constructor = type.Constructor
+				Constructor = type.Constructor,
+				TypeValues = type.TypeValues
 			});
 			Types.Add(type);
 			RefreshConstructedTypeNames(type.Id, type.Name);

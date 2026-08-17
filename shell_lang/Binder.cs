@@ -308,7 +308,7 @@ internal sealed partial class Binder
 	private BoundExpression BindStageName(NameSyntax syntax, BoundExpression primary)
 	{
 		if (_engine.TryGetType(syntax.Name, out _))
-			return ErrorExpression("SL2502", $"Type constructor '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
+			return ErrorExpression("SL2502", $"Type call '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
 		if (ShellEngine.IntrinsicNames.Contains(syntax.Name))
 			return BindIntrinsic(syntax.Name, [], primary, syntax.Span);
 		if (!_engine.Commands.TryGetValue(syntax.Name, out var command))
@@ -321,7 +321,9 @@ internal sealed partial class Binder
 		if (_engine.TryGetType(syntax.Name, out var type))
 		{
 			if (primary is not null)
-				return ErrorExpression("SL2502", $"Type constructor '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
+				return ErrorExpression("SL2502", $"Type call '{syntax.Name}' cannot be used as a pipeline stage.", syntax.Span);
+			if (_engine.IsConversionTarget(type.Id))
+				return BindConversion(type, syntax);
 			return BindConstructor(type, syntax);
 		}
 		if (ShellEngine.IntrinsicNames.Contains(syntax.Name))
@@ -441,14 +443,9 @@ internal sealed partial class Binder
 
 	private BoundExpression BindMember(MemberSyntax syntax)
 	{
-		if (syntax.Receiver is NameSyntax typeName && _engine.TryGetType(typeName.Name, out var enumEntry) && enumEntry.Kind == ShellTypeKind.Enum)
+		if (syntax.Receiver is NameSyntax typeName && _engine.TryGetType(typeName.Name, out var typeEntry))
 		{
-			var enumMember = enumEntry.EnumMembers.FirstOrDefault(x => x.Name == syntax.Name);
-			if (enumMember is null)
-				return ErrorExpression("SL2301", $"Enum '{typeName.Name}' has no member '{syntax.Name}'.", syntax.Span);
-			if (syntax.Arguments is not null)
-				Error("SL2302", "Enum members cannot be invoked.", syntax.Span);
-			return new BoundLiteralExpression(_engine.CreateValue(enumEntry.Id, enumMember.Value), syntax.Span);
+			return BindTypeValue(typeEntry, syntax.Name, syntax.Arguments, syntax.Span);
 		}
 		var receiver = BindExpression(syntax.Receiver);
 		return BindMemberOn(receiver, syntax.Name, syntax.Arguments, syntax.Span);

@@ -19,6 +19,10 @@ target.position -> print
 local_player -> give_credits(amount: this.name_length()) -> require
 transform = Transform(Vector3(1, 2, 3), Quaternion(), Vector3(1, 1, 1))
 transform.position.x -> print
+gravity = Physics.gravity
+weapons = Weapon.values
+precise = Float64(1)
+small = Float32(1) -> require
 ```
 
 The language uses a small set of connection forms:
@@ -54,6 +58,8 @@ The specification documents are normative. This README is only an introduction.
 - A scalar operation maps over `Array<T>` when no array-consuming connection exists.
 - `Result<T,E>` propagates errors without invoking downstream operations.
 - Only registered CLR values and operations are visible.
+- Core conversions are explicit; checked conversions return `Result<T,ConversionError>`.
+- Types can expose read-only scoped values, and every enum exposes `.values` in declaration order.
 - The runtime executes synchronously and preserves array order.
 
 For example, a command that accepts one `Player` maps over `Array<Player>`:

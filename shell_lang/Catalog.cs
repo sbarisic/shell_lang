@@ -61,6 +61,10 @@ public sealed class CoreTypeCatalog
 	{
 		get; internal init;
 	}
+	public ShellTypeId ConversionError
+	{
+		get; internal init;
+	}
 }
 
 internal enum ShellTypeKind
@@ -111,6 +115,7 @@ internal sealed class TypeEntry
 	{
 		get; init;
 	}
+	public IReadOnlyList<TypeValueDescriptor> TypeValues { get; init; } = Array.Empty<TypeValueDescriptor>();
 	public ShellTypeId? ElementType
 	{
 		get; init;

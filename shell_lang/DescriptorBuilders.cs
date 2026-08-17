@@ -15,6 +15,7 @@ public sealed class TypeDescriptorBuilder<T> where T : notnull
 	private EqualityDescriptor? _equality;
 	private OrderingDescriptor? _ordering;
 	private ConstructorDescriptor? _constructor;
+	private readonly List<TypeValueDescriptor> _typeValues = [];
 	internal TypeDescriptorBuilder(string name) => _name = name;
 	public TypeDescriptorBuilder<T> Description(string value)
 	{
@@ -77,7 +78,34 @@ public sealed class TypeDescriptorBuilder<T> where T : notnull
 		}, errorType);
 		return this;
 	}
-	public TypeDescriptor Build() => new(_name, _description, typeof(T), new ValueAdapter<T>(), _bases, _members, _queries, _equality, _ordering, _constructor);
+	public TypeDescriptorBuilder<T> Value<TValue>(string name, string description, ShellTypeId type, TValue value)
+		where TValue : notnull
+	{
+		_typeValues.Add(new TypeValueDescriptor(name, description, type, new ShellValue(type, value)));
+		return this;
+	}
+	public TypeDescriptorBuilder<T> Value(string name, string description, T value)
+	{
+		_typeValues.Add(new TypeValueDescriptor(name, description, value));
+		return this;
+	}
+	public TypeDescriptorBuilder<T> ProvidedValue<TValue>(string name, string description, ShellTypeId type,
+		Func<InvocationContext, TValue> getValue) where TValue : notnull
+	{
+		ArgumentNullException.ThrowIfNull(getValue);
+		_typeValues.Add(new TypeValueDescriptor(name, description, type,
+			context => context.Engine.CreateValue(type, getValue(context))));
+		return this;
+	}
+	public TypeDescriptorBuilder<T> ProvidedValue(string name, string description,
+		Func<InvocationContext, T> getValue)
+	{
+		ArgumentNullException.ThrowIfNull(getValue);
+		_typeValues.Add(new TypeValueDescriptor(name, description, context => getValue(context)));
+		return this;
+	}
+	public TypeDescriptor Build() => new(_name, _description, typeof(T), new ValueAdapter<T>(), _bases, _members,
+		_queries, _equality, _ordering, _constructor, _typeValues);
 }
 
 public static class CommandDescriptorBuilder

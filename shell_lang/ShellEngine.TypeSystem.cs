@@ -61,6 +61,7 @@ public sealed partial class ShellEngine
 		var error = Add<ShellError>("Error", ShellTypeKind.Error);
 		var empty = Add<EmptyCollectionError>("EmptyCollectionError", ShellTypeKind.Error, error);
 		var cardinality = Add<CollectionCardinalityError>("CollectionCardinalityError", ShellTypeKind.Error, error);
+		var conversion = Add<ConversionError>("ConversionError", ShellTypeKind.Error, error);
 		Core = new CoreTypeCatalog
 		{
 			Any = any,
@@ -75,7 +76,8 @@ public sealed partial class ShellEngine
 			String = str,
 			Error = error,
 			EmptyCollectionError = empty,
-			CollectionCardinalityError = cardinality
+			CollectionCardinalityError = cardinality,
+			ConversionError = conversion
 		};
 		foreach (var name in IntrinsicNames)
 		{

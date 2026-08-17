@@ -15,6 +15,10 @@ internal sealed record BoundApplyExpression(BoundExpression Primary, BoundOperat
 	IReadOnlyList<BoundSecondary> Secondary, ShellTypeId Type, SourceSpan Span) : BoundExpression(Type, Span);
 internal sealed record BoundConstructorExpression(ConstructorDescriptor Constructor,
 	IReadOnlyList<BoundConstructorArgument> Arguments, ShellTypeId Type, SourceSpan Span) : BoundExpression(Type, Span);
+internal sealed record BoundConversionExpression(CoreConversion Conversion, BoundExpression Operand,
+	ShellTypeId Type, SourceSpan Span) : BoundExpression(Type, Span);
+internal sealed record BoundTypeValueExpression(TypeValueDescriptor? Descriptor, ShellTypeId OwnerType,
+	string Name, ShellTypeId Type, bool IsEnumValues, SourceSpan Span) : BoundExpression(Type, Span);
 
 internal sealed record BoundSecondary(string Name, bool IsInput, BoundExpression Expression, AdaptationPlan Adaptation,
 	SourceSpan Span, int? ContextScopeId = null);

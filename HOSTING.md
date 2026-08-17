@@ -42,10 +42,12 @@ public sealed record ValueFormatOptions;
 public readonly record struct RuntimeFaultCode;
 public sealed record EmptyCollectionError;
 public sealed record CollectionCardinalityError;
+public sealed record ConversionError(ShellTypeId SourceType, ShellTypeId TargetType, string Reason);
 
 public sealed class DescriptorSet;
 public sealed class TypeDescriptor;
 public sealed class ConstructorDescriptor;
+public sealed class TypeValueDescriptor;
 public sealed class EnumTypeDescriptor;
 public sealed class ErrorTypeDescriptor;
 public sealed class GlobalDescriptor;
@@ -99,6 +101,7 @@ public sealed class ShellEngine
         ShellSession session);
 
     public HelpItem? GetHelp(SymbolId symbol);
+    public HelpItem? GetTypeHelp(ShellTypeId type);
 
     public string FormatValue(
         ShellValue value,
@@ -113,7 +116,7 @@ A successful registration increments `CatalogRevision` once. A failed registrati
 
 The engine MUST include core types and compiler intrinsics in every catalog. A host cannot replace them.
 
-`CoreTypeCatalog` exposes `EmptyCollectionError` and `CollectionCardinalityError` type identifiers. A `CollectionCardinalityError` value contains the actual array count that caused `single` to fail.
+`CoreTypeCatalog` exposes `EmptyCollectionError`, `CollectionCardinalityError`, and `ConversionError` type identifiers. A `CollectionCardinalityError` value contains the actual array count that caused `single` to fail.
 
 An engine instance MAY compile scripts for several sessions. Descriptors are shared across those sessions.
 
@@ -188,6 +191,7 @@ public sealed class TypeDescriptor
     public EqualityDescriptor? Equality { get; }
     public OrderingDescriptor? Ordering { get; }
     public ConstructorDescriptor? Constructor { get; }
+    public IReadOnlyList<TypeValueDescriptor> TypeValues { get; }
 }
 ```
 
@@ -235,6 +239,28 @@ public abstract record ConstructorOutcome<T>
 Constructors are synchronous and contractually pure. The runtime evaluates their arguments once in source order, validates the success value against the owning descriptor, and validates errors against `ErrorType`. A null or unknown outcome, a wrong constructed value, an undeclared or wrong error, or a delegate exception becomes an `SL5117`-`SL5119` host fault. A constructor cannot mutate public session bindings while execution is active; the execution guard contains that attempt at the constructor boundary.
 
 Core, enum, error, output-record, array, and Result types are not host-constructible. Constructors are explicit metadata: the engine MUST NOT discover CLR constructors, conversion operators, fields, or properties through reflection.
+
+### 6.1.2 Type-scoped values
+
+`TypeDescriptor` can contain immutable `TypeValueDescriptor` entries. Each entry has a name, description, result `ShellTypeId`, and exactly one fixed `ShellValue` or synchronous `TypeValueProvider`.
+
+```csharp
+public delegate ShellValue TypeValueProvider(InvocationContext context);
+
+public sealed class TypeValueDescriptor
+{
+    public string Name { get; }
+    public string Description { get; }
+    public ShellTypeId ValueType { get; }
+    public ShellValue? FixedValue { get; }
+    public TypeValueProvider? GetValue { get; }
+    public bool IsProviderBacked { get; }
+}
+```
+
+The typed builder can add an owning-type value with `Value(...)` or `ProvidedValue(...)`. Generic overloads can declare a different explicit result type. A fixed value is validated at registration and reused. A provider runs at every reference and is validated at runtime. `SL5120` reports a null or wrong ShellLang type, `SL5121` reports an invalid CLR payload, and `SL5122` contains provider exceptions, including attempts to mutate the active session.
+
+Type-scoped values are non-inherited, read-only, and non-invocable. The engine synthesizes `values : Array<Enum>` for every enum and returns a new immutable array in declaration order. It does not discover CLR static state through reflection.
 
 ### 6.2 ValueAdapter
 
@@ -297,6 +323,12 @@ It contains:
 - Optional ordering metadata
 
 The engine uses these member names for contextual enum lookup and completion.
+
+The scoped name `values` is reserved for the synthesized immutable array. Registration rejects a host enum member with that name.
+
+### 6.4.1 Core conversions
+
+The engine owns the explicit numeric and `String` conversion matrix. Hosts cannot add or overload conversions. `ConversionError` is a public core error carrying source type, target type, and a safe reason. Guaranteed conversions return the target directly; range- or representation-sensitive conversions return `Result<T,ConversionError>`. The engine uses invariant formatting and registered ShellLang enum member names, never CLR `ToString()` as an extensibility mechanism.
 
 The host MUST register duplicate CLR aliases as separate ShellLang names only when it intends to expose both names.
 
@@ -670,10 +702,12 @@ The example is not permission to infer names, descriptions, ports, defaults, or 
 18. Every command runtime fault reference resolves to a registered fault descriptor.
 19. The reserved name `this` does not appear in script-visible descriptor metadata.
 20. Each constructor argument and declared error follows the same validation rules as a query argument and query error.
+21. Type-scoped value names are unique, described, and valid; their result types resolve and fixed payloads match their descriptors.
+22. Enum members do not use the reserved scoped name `values`.
 
 A failed registration returns one or more `HostingDiagnostic` items. It MUST report all independent validation errors that it can find safely.
 
-`SL3022` reports any attempted use of the reserved script-visible name `this`. `SL3023` reports a callable-name collision involving a constructible type, command, or intrinsic. Both failures are atomic and leave the catalog revision unchanged.
+`SL3022` reports any attempted use of the reserved script-visible name `this`. `SL3023` reports a callable-name collision involving an invocable type, command, or intrinsic. `SL3024` reports an invalid, duplicate, or reserved scoped value. These failures are atomic and leave the catalog revision unchanged.
 
 The result has this semantic shape:
 
@@ -890,8 +924,9 @@ The engine MUST expose descriptors and compiler intrinsics through one read-only
 - Intrinsics valid for the current type
 - `this` and members of its exact effective type only in a valid contextual expression
 - Constructible nominal types and constructor signatures in expression position, but not pipeline-stage position
+- Core conversion signatures, host type-scoped values, and synthesized enum `values`
 
-A completion item contains a replacement span, insertion text, symbol kind, display type, and short description. `CompletionItemKind.Context` identifies the `this` suggestion. Command help reports the declared default-input context, query help reports its receiver context, and type help reports constructor arguments, defaults, output, and declared error.
+A completion item contains a replacement span, insertion text, symbol kind, display type, and short description. `CompletionItemKind.Context` identifies the `this` suggestion. Command help reports the declared default-input context, query help reports its receiver context, and type help reports constructor arguments, defaults, output, declared error, scoped values, and conversions. `GetTypeHelp(ShellTypeId)` also returns help for core types that do not have registered symbol identities.
 
 The host can build `help`, autocomplete, and editor features without executing a command.
 

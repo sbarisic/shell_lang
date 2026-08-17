@@ -384,13 +384,17 @@ public sealed class CompletionList
 public sealed record HelpParameter(string Name, ShellTypeId Type, string Description,
 	bool Required = true, ShellValue? DefaultValue = null, bool IsDefault = false);
 
+public sealed record HelpTypeValue(string Name, ShellTypeId Type, string Description, bool IsProviderBacked);
+public sealed record HelpConversion(ShellTypeId SourceType, ShellTypeId ResultType, bool IsFallible, string Description);
+
 public sealed class HelpItem
 {
 	internal HelpItem(SymbolId id, string name, string kind, string description,
 		IReadOnlyList<HelpParameter>? inputs = null, IReadOnlyList<HelpParameter>? arguments = null,
 		IReadOnlyList<HelpParameter>? outputs = null, ShellTypeId? errorType = null,
 		IReadOnlyList<RuntimeFaultDescriptor>? runtimeFaults = null, IReadOnlyList<string>? members = null,
-		ShellTypeId? contextType = null)
+		ShellTypeId? contextType = null, IReadOnlyList<HelpTypeValue>? typeValues = null,
+		IReadOnlyList<HelpConversion>? conversions = null)
 	{
 		Id = id;
 		Name = name;
@@ -403,6 +407,8 @@ public sealed class HelpItem
 		RuntimeFaults = runtimeFaults ?? Array.Empty<RuntimeFaultDescriptor>();
 		Members = members ?? Array.Empty<string>();
 		ContextType = contextType;
+		TypeValues = typeValues ?? Array.Empty<HelpTypeValue>();
+		Conversions = conversions ?? Array.Empty<HelpConversion>();
 	}
 	public SymbolId Id
 	{
@@ -448,6 +454,8 @@ public sealed class HelpItem
 	{
 		get;
 	}
+	public IReadOnlyList<HelpTypeValue> TypeValues { get; }
+	public IReadOnlyList<HelpConversion> Conversions { get; }
 }
 
 public sealed class IntrinsicDescriptor

@@ -137,10 +137,17 @@ public sealed partial class ShellEngine
 			if (contextCompilation.IsValid)
 				pipelineType = contextCompilation.ResultType;
 		}
-		var expressionPosition = position > 0 && source.LastIndexOf('(', position - 1) >= 0;
+		var lastOpen = position > 0 ? source.LastIndexOf('(', position - 1) : -1;
+		var lastClose = position > 0 ? source.LastIndexOf(')', position - 1) : -1;
+		var expressionPosition = lastOpen > Math.Max(arrow, lastClose);
 		if (pipelineType is null || expressionPosition)
-			foreach (var type in Types.Where(x => x.Constructor is not null))
-				Add(type.Name, CompletionItemKind.Type, DescribeConstructor(type), type.Description);
+		{
+			foreach (var type in Types.Where(x => x.Constructor is not null || x.TypeValues.Count != 0))
+				Add(type.Name, CompletionItemKind.Type,
+					type.Constructor is null ? type.Name : DescribeConstructor(type), type.Description);
+			foreach (var target in _typeEntries.Values.Where(x => IsConversionTarget(x.Id) && ConversionsTo(x.Id).Count != 0))
+				Add(target.Name, CompletionItemKind.Type, DescribeConversions(target.Id), target.Description);
+		}
 		var completionContext = FindCompletionContextType(source, position, session, arrow, pipelineType);
 		if (completionContext is { } contextType)
 		{
@@ -202,13 +209,21 @@ public sealed partial class ShellEngine
 			ShellTypeId? receiverType = null;
 			if (receiverName == "this" && completionContext is not null)
 				receiverType = completionContext;
+			else if (TryGetType(receiverName, out var scopedType))
+			{
+				if (scopedType.Kind == ShellTypeKind.Enum)
+				{
+					foreach (var member in scopedType.EnumMembers)
+						Add(member.Name, CompletionItemKind.EnumMember, scopedType.Name, member.Description);
+					Add("values", CompletionItemKind.Member, TypeName(ArrayOf(scopedType.Id)), "All enum values in declaration order.");
+				}
+				foreach (var typeValue in scopedType.TypeValues)
+					Add(typeValue.Name, CompletionItemKind.Member, TypeName(typeValue.ValueType), typeValue.Description);
+			}
 			else if (session.TryGetBinding(receiverName, out var value))
 				receiverType = value.Type;
 			else if (Globals.TryGetValue(receiverName, out var global))
 				receiverType = global.Type;
-			else if (TryGetType(receiverName, out var enumType) && enumType.Kind == ShellTypeKind.Enum)
-				foreach (var member in enumType.EnumMembers)
-					Add(member.Name, CompletionItemKind.EnumMember, enumType.Name, member.Description);
 			if (receiverType is { } type)
 			{
 				foreach (var candidate in MemberCompletions(type))
@@ -262,16 +277,47 @@ public sealed partial class ShellEngine
 				arguments: q.Arguments.Select(x => new HelpParameter(x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
 				outputs: [new("value", q.OutputType, q.Description)], errorType: q.ErrorType, contextType: q.ReceiverType),
 			IntrinsicDescriptor i => new HelpItem(i.Id, i.Name, "intrinsic", i.Description),
-			TypeDescriptor t => new HelpItem(t.SymbolId, t.Name, "type", t.Description,
-				arguments: t.Constructor?.Arguments.Select(x => new HelpParameter(
-					x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
-				outputs: t.Constructor is null ? null : [new("value", t.Id, t.Description)],
-				errorType: t.Constructor?.ErrorType,
-				members: GetTypeEntry(t.Id).ResolvedSymbols.Select(x => x.Name).ToArray()),
-			EnumTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "enum", e.Description, members: e.Members.Select(x => x.Name).ToArray()),
+			TypeDescriptor t => BuildTypeHelp(t.Id, t.SymbolId),
+			EnumTypeDescriptor e => BuildTypeHelp(e.Id, e.SymbolId),
 			ErrorTypeDescriptor e => new HelpItem(e.SymbolId, e.Name, "error", e.Description),
 			_ => null
 		};
+	}
+
+	public HelpItem? GetTypeHelp(ShellTypeId type)
+	{
+		if (!_typeEntries.ContainsKey(type))
+			return null;
+		var symbol = Types.FirstOrDefault(x => x.Id == type)?.SymbolId ??
+			Enums.FirstOrDefault(x => x.Id == type)?.SymbolId ??
+			Errors.FirstOrDefault(x => x.Id == type)?.SymbolId ?? default;
+		return BuildTypeHelp(type, symbol);
+	}
+
+	private HelpItem BuildTypeHelp(ShellTypeId type, SymbolId symbol)
+	{
+		var entry = GetTypeEntry(type);
+		var descriptor = Types.FirstOrDefault(x => x.Id == type);
+		var values = entry.TypeValues.Select(x => new HelpTypeValue(x.Name, x.ValueType, x.Description, x.IsProviderBacked)).ToList();
+		if (entry.Kind == ShellTypeKind.Enum)
+			values.Add(new("values", ArrayOf(type), "All enum values in declaration order.", false));
+		var conversions = ConversionsTo(type).Select(x => new HelpConversion(x.SourceType,
+			x.IsFallible ? ResultOf(type, Core.ConversionError) : type, x.IsFallible,
+			x.IsFallible ? "Checked explicit conversion." : "Guaranteed explicit conversion.")).ToArray();
+		return new HelpItem(symbol, entry.Name, entry.Kind switch
+		{
+			ShellTypeKind.Enum => "enum",
+			ShellTypeKind.Error => "error",
+			_ => "type"
+		}, entry.Description,
+			arguments: descriptor?.Constructor?.Arguments.Select(x => new HelpParameter(
+				x.Name, x.Type, x.Description, x.Required, x.DefaultValue)).ToArray(),
+			outputs: descriptor?.Constructor is null ? null : [new("value", type, entry.Description)],
+			errorType: descriptor?.Constructor?.ErrorType,
+			members: entry.Kind == ShellTypeKind.Enum
+				? entry.EnumMembers.Select(x => x.Name).Concat(["values"]).ToArray()
+				: entry.ResolvedSymbols.Select(x => x.Name).ToArray(),
+			typeValues: values, conversions: conversions);
 	}
 
 	internal string TypeName(ShellTypeId type) => GetTypeEntry(type).Name;
@@ -293,6 +339,8 @@ public sealed partial class ShellEngine
 			? $"Result<{type.Name},{TypeName(error)}>" : type.Name;
 		return $"{type.Name}({arguments}) -> {output}";
 	}
+	private string DescribeConversions(ShellTypeId type) =>
+		$"{TypeName(type)}(value) -> {TypeName(type)} or Result<{TypeName(type)},ConversionError>";
 
 	private ShellTypeId? FindCompletionContextType(string source, int position, ShellSession session,
 		int arrow, ShellTypeId? pipelineType)

@@ -238,7 +238,7 @@ The compiler resolves a bare value identifier in this order:
 
 A command name resolves only in an invocation or pipeline-stage position. Command values are not first-class values.
 
-A type name resolves in a type context, as the left side of an explicit enum member, or as a constructor invocation. A type invocation resolves before command lookup. A constructible type name cannot collide with a command or intrinsic.
+A type name resolves in a type context, as the left side of a type-scoped value, or as a type invocation. A type-qualified name resolves before a same-spelled binding or global. A type invocation resolves before command lookup and denotes either the host type's constructor or an engine-owned core conversion. An invocable type name cannot collide with a command or intrinsic.
 
 ```text
 DamageType.Fire
@@ -317,7 +317,7 @@ ShellLang 0.1 defines these core types:
 | `Error` | Root type for declared errors |
 | `Void` | Absence of an output value |
 
-`EmptyCollectionError` and `CollectionCardinalityError` are core errors derived directly from `Error`. `CollectionCardinalityError` records the actual element count.
+`EmptyCollectionError`, `CollectionCardinalityError`, and `ConversionError` are core errors derived directly from `Error`. `CollectionCardinalityError` records the actual element count. `ConversionError` records source type, target type, and a safe failure reason.
 
 `Void` is not a value type. It is not assignable to `Any`, cannot enter an array, and cannot feed another operation.
 
@@ -424,6 +424,18 @@ player -> damage(type: Fire)
 The explicit `EnumType.Member` form does not need an expected type.
 
 If more than one active context could supply an enum type, the compiler MUST require the explicit form.
+
+Every enum also has a reserved `values` scoped value. `Weapon.values` produces a new immutable `Array<Weapon>` in registered declaration order. A host cannot declare an enum member named `values`.
+
+Nominal host types can declare fixed or provider-backed read-only values with the same qualification syntax:
+
+```shelllang
+origin = Vector3.zero
+gravity = Physics.gravity
+weapons = Weapon.values
+```
+
+A provider runs once for each reference. The engine validates its ShellLang type and CLR payload and contains provider exceptions as host faults. Type-scoped values are normal expressions, so they can be assigned, passed to commands, stored in arrays, or piped. ShellLang does not discover CLR static fields or properties.
 
 ### 7.3 Operator precedence
 
@@ -747,6 +759,28 @@ Constructors cannot be pipeline stages and do not accept `<-` entries. Arguments
 `SL2501` reports a call to a non-constructible type, `SL2502` reports constructor use as a pipeline stage, and `SL2503` reports a constructor-specific invalid entry such as `<-`.
 
 Constructors are synchronous and contractually pure. Their values, errors, and CLR payloads are validated at the host boundary. Delegate exceptions and invalid outcomes are contained as host faults. ShellLang never discovers constructors through reflection.
+
+### 10.8 Explicit core conversions
+
+`TargetType(value)` is an engine-owned conversion when `TargetType` is a supported core target. The operand is bound without the target's contextual literal type, evaluates once, and can be any supported numeric source. A conversion is an expression, cannot be a pipeline stage, and does not accept `<-` entries.
+
+Identity numeric conversions and these widening conversions are guaranteed and return the target type directly:
+
+- `Int32` to `Int64` or `Float64`
+- `UInt32` to `Int64`, `UInt64`, or `Float64`
+- `Float32` to `Float64`
+
+Every other numeric cross-conversion is checked and returns `Result<T,ConversionError>`. Floating-to-integer conversion requires a finite, integral, in-range value. Integer narrowing and integer-to-floating conversion require an exact round trip. Floating narrowing requires a finite, exactly representable result. `NaN` and infinities survive only numeric identity and `Float32` to `Float64`; other numeric cross-conversions return `ConversionError`.
+
+`String(value)` is guaranteed for `Bool`, numeric core values, strings, and enums. It uses lowercase Boolean text, invariant canonical numeric text, and the registered ShellLang enum member name. It does not parse strings, convert numbers to `Bool`, invoke CLR conversion operators, or apply implicitly.
+
+```shelllang
+precise = Float64(10)
+checked = Float32(10) -> require
+weapon_name = String(Weapon.Shotgun)
+```
+
+If the operand is an `Err`, the conversion does not run and the error propagates. A checked conversion combines the operand error with `ConversionError` through the nearest-common-error rule.
 
 ## 11. Array lifting
 
@@ -1101,6 +1135,7 @@ ShellLang 0.1 does not include these features:
 - Concurrent lifting
 - `--argument` command-line syntax
 - Implicit numeric conversion for typed values
+- String-to-number parsing or Boolean/numeric conversion
 - Runtime casts or type tests
 
 These exclusions are compatibility boundaries for version 0.1. Later specifications can add them without changing the rules in this document.

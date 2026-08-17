@@ -97,6 +97,8 @@ internal sealed partial class Evaluator
 				BoundBinaryExpression binary => EvaluateBinary(binary, path),
 				BoundApplyExpression apply => EvaluateApply(apply, path),
 				BoundConstructorExpression constructor => EvaluateConstructor(constructor, path),
+				BoundConversionExpression conversion => EvaluateConversion(conversion, path),
+				BoundTypeValueExpression typeValue => EvaluateTypeValue(typeValue, path),
 				_ => EvalOutcome.Host(new HostFault("SL5008", "Unknown bound expression.", expression.Span))
 			};
 		}

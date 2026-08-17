@@ -10,6 +10,7 @@ internal sealed record Vec3(float X, float Y, float Z)
 internal sealed record Quaternion(float X, float Y, float Z, float W);
 internal sealed record Color(float R, float G, float B, float A);
 internal sealed record Transform(Vec3 Position, Quaternion Rotation, Vec3 Scale);
+internal sealed record Physics;
 internal sealed record GameMap(string Name, ulong Seed);
 internal sealed record GameWorld(string Name);
 internal sealed record GameRules(Difficulty Difficulty);
@@ -141,10 +142,13 @@ internal sealed class MockGame
                 .Member("x", "X component.", core.Float32, x => x.X)
                 .Member("y", "Y component.", core.Float32, x => x.Y)
                 .Member("z", "Z component.", core.Float32, x => x.Z)
+                .Value("zero", "Zero vector.", new Vec3(0, 0, 0))
+                .Value("up", "Unit up vector.", new Vec3(0, 1, 0))
                 .Constructor([C("x", core.Float32, 0), C("y", core.Float32, 1), C("z", core.Float32, 2)],
                     (_, values) => new Vec3(values.GetArgument<float>("x"), values.GetArgument<float>("y"), values.GetArgument<float>("z")))),
             Host<Quaternion>("Quaternion", b => b
                 .Member("w", "W component.", core.Float32, x => x.W)
+                .Value("identity", "Identity rotation.", new Quaternion(0, 0, 0, 1))
                 .Constructor([
                     C("x", core.Float32, 0, engine.CreateValue(core.Float32, 0F)),
                     C("y", core.Float32, 1, engine.CreateValue(core.Float32, 0F)),
@@ -154,6 +158,7 @@ internal sealed class MockGame
                         values.GetArgument<float>("z"), values.GetArgument<float>("w")))),
             Host<Color>("Color", b => b
                 .Member("a", "Alpha component.", core.Float32, x => x.A)
+                .Value("white", "Opaque white.", new Color(1, 1, 1, 1))
                 .Constructor([
                     C("r", core.Float32, 0), C("g", core.Float32, 1), C("b", core.Float32, 2),
                     C("a", core.Float32, 3, engine.CreateValue(core.Float32, 1F))],
@@ -169,6 +174,8 @@ internal sealed class MockGame
                     C("scale", TypeId("Vector3"), 2)],
                     (_, values) => new Transform(values.GetArgument<Vec3>("position"),
                         values.GetArgument<Quaternion>("rotation"), values.GetArgument<Vec3>("scale")))),
+            Host<Physics>("Physics", b => b
+                .ProvidedValue<Vec3>("gravity", "Current world gravity.", TypeId("Vector3"), _ => new Vec3(0, -9.81F, 0))),
             Host<MapMarker>("MapMarker", b => b.Member("classname", "Editor classname.", core.String, x => x.Classname)
                 .Member("name", "Marker name.", core.String, x => x.Name).Member("position", "Marker position.", TypeId("Vector3"), x => x.Position)
                 .Member("spawn_order", "Spawn order.", core.Int32, x => x.SpawnOrder).Member("stable_id", "Stable id.", core.UInt64, x => x.StableId)),
