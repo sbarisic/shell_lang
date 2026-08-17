@@ -28,7 +28,7 @@ value.member
 
 ShellLang 0.1 is implemented as a dependency-free .NET 10 library. It includes the handwritten parser, static binder, descriptor catalog, synchronous runtime, collection intrinsics, diagnostics, help, and completion APIs.
 
-The `shell_lang_test` console project is both the conformance runner and a deterministic mock-game host for the complete map bootstrap example.
+The `shell_lang_test` console project is an interactive in-game-style console, a conformance runner, and a deterministic mock-game host for the complete map bootstrap example.
 
 ## Specifications
 
@@ -75,13 +75,16 @@ The project requires the .NET 10 SDK.
 dotnet build .\shell_lang.slnx
 ```
 
-Run the conformance cases and example together, or select one mode:
+Start the interactive console, or run one of the verification modes:
 
 ```powershell
 dotnet run --project .\shell_lang_test
 dotnet run --project .\shell_lang_test -- --tests
 dotnet run --project .\shell_lang_test -- --example
+dotnet run --project .\shell_lang_test -- --all
 ```
+
+The console keeps one session alive, so bindings carry over between entries. Enter a ShellLang expression and press Enter to evaluate it. The `print` command writes its value using the host value's raw string representation, while successful commands with no result remain silent. Type `help` to list the registered commands and intrinsics, `help <name>` for detailed symbol help, or `exit`/`quit` to close.
 
 ## License
 

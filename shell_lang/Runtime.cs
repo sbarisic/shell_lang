@@ -5,10 +5,23 @@ namespace ShellLang;
 internal sealed class EvalOutcome
 {
     private EvalOutcome(ShellValue? value, RuntimeFault? runtimeFault, HostFault? hostFault)
-    { Value = value; RuntimeFault = runtimeFault; HostFault = hostFault; }
-    public ShellValue? Value { get; }
-    public RuntimeFault? RuntimeFault { get; }
-    public HostFault? HostFault { get; }
+    {
+        Value = value;
+        RuntimeFault = runtimeFault;
+        HostFault = hostFault;
+    }
+    public ShellValue? Value
+    {
+        get;
+    }
+    public RuntimeFault? RuntimeFault
+    {
+        get;
+    }
+    public HostFault? HostFault
+    {
+        get;
+    }
     public bool Failed => RuntimeFault is not null || HostFault is not null;
     public static EvalOutcome Success(ShellValue? value) => new(value, null, null);
     public static EvalOutcome Runtime(RuntimeFault value) => new(null, value, null);
@@ -24,28 +37,47 @@ internal sealed class Evaluator
     private ShellValue? _contextValue;
 
     public Evaluator(ShellEngine engine, ShellSession session, IServiceProvider services, ExecutionOptions? options)
-    { _engine = engine; _session = session; _services = services; _options = options; }
+    {
+        _engine = engine;
+        _session = session;
+        _services = services;
+        _options = options;
+    }
 
     public ExecutionResult Execute(BoundProgram program)
     {
-        ShellValue? final = null; var completed = 0;
+        ShellValue? final = null;
+        var completed = 0;
         for (var i = 0; i < program.Statements.Count; i++)
         {
             var statement = program.Statements[i];
-            var expression = statement switch { BoundAssignment a => a.Expression, BoundExpressionStatement e => e.Expression, _ => throw new InvalidOperationException() };
+            var expression = statement switch
+            {
+                BoundAssignment a => a.Expression,
+                BoundExpressionStatement e => e.Expression,
+                _ => throw new InvalidOperationException()
+            };
             var outcome = Evaluate(expression, []);
-            if (outcome.RuntimeFault is { } runtime) return new(ExecutionStatus.RuntimeFault, null, runtime, null, completed);
-            if (outcome.HostFault is { } host) return new(ExecutionStatus.HostFault, null, null, host, completed);
+            if (outcome.RuntimeFault is { } runtime)
+                return new(ExecutionStatus.RuntimeFault, null, runtime, null, completed);
+            if (outcome.HostFault is { } host)
+                return new(ExecutionStatus.HostFault, null, null, host, completed);
             if (statement is BoundAssignment assignment)
             {
-                if (outcome.Value is null) return HostResult("SL5006", "An assignment produced Void.", statement.Span, completed);
-                _session.SetBinding(assignment.Name, outcome.Value); final = null;
+                if (outcome.Value is null)
+                    return HostResult("SL5006", "An assignment produced Void.", statement.Span, completed);
+                _session.SetBinding(assignment.Name, outcome.Value);
+                final = null;
             }
-            else final = outcome.Value;
+            else
+                final = outcome.Value;
             completed++;
             if (_options?.Observer is { } observer)
             {
-                try { observer.StatementCompleted(i, statement.Span, statement is BoundAssignment ? null : final); }
+                try
+                {
+                    observer.StatementCompleted(i, statement.Span, statement is BoundAssignment ? null : final);
+                }
                 catch (Exception ex) { return HostResult("SL5007", "The execution observer failed.", statement.Span, completed, ex); }
             }
         }
@@ -76,7 +108,8 @@ internal sealed class Evaluator
 
     private EvalOutcome EvaluateName(BoundNameExpression expression, IReadOnlyList<int> path)
     {
-        if (expression.Name == ".") return _contextValue is null
+        if (expression.Name == ".")
+            return _contextValue is null
             ? EvalOutcome.Host(new HostFault("SL5010", "No contextual element is active.", expression.Span))
             : EvalOutcome.Success(_contextValue);
         if (!expression.IsGlobal)
@@ -87,7 +120,8 @@ internal sealed class Evaluator
             return EvalOutcome.Host(new HostFault("SL5011", $"Global '{expression.Name}' is missing.", expression.Span));
         try
         {
-            var context = Context(expression.Span, path); var value = global.GetValue(context);
+            var context = Context(expression.Span, path);
+            var value = global.GetValue(context);
             return ValidateValue(value, global.Type, expression.Span, $"global '{global.Name}'");
         }
         catch (Exception ex) { return EvalOutcome.Host(new HostFault("SL5101", $"Global '{global.Name}' failed.", expression.Span, ex)); }
@@ -98,8 +132,11 @@ internal sealed class Evaluator
         var values = new List<ShellValue>();
         for (var i = 0; i < expression.Items.Count; i++)
         {
-            var outcome = Evaluate(expression.Items[i], Append(path, i)); if (outcome.Failed) return outcome;
-            if (outcome.Value is null) return EvalOutcome.Host(new HostFault("SL5012", "An array item produced Void.", expression.Items[i].Span));
+            var outcome = Evaluate(expression.Items[i], Append(path, i));
+            if (outcome.Failed)
+                return outcome;
+            if (outcome.Value is null)
+                return EvalOutcome.Host(new HostFault("SL5012", "An array item produced Void.", expression.Items[i].Span));
             values.Add(outcome.Value);
         }
         var element = _engine.GetTypeEntry(expression.Type).ElementType!.Value;
@@ -108,7 +145,9 @@ internal sealed class Evaluator
 
     private EvalOutcome EvaluateUnary(BoundUnaryExpression expression, IReadOnlyList<int> path)
     {
-        var operand = Evaluate(expression.Operand, path); if (operand.Failed) return operand;
+        var operand = Evaluate(expression.Operand, path);
+        if (operand.Failed)
+            return operand;
         try
         {
             object value = expression.Operator switch
@@ -127,27 +166,42 @@ internal sealed class Evaluator
 
     private EvalOutcome EvaluateBinary(BoundBinaryExpression expression, IReadOnlyList<int> path)
     {
-        var left = Evaluate(expression.Left, path); if (left.Failed) return left;
-        if (expression.Operator == TokenKind.AndAnd && left.Value!.Value is false) return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, false));
-        if (expression.Operator == TokenKind.OrOr && left.Value!.Value is true) return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, true));
-        var right = Evaluate(expression.Right, path); if (right.Failed) return right;
+        var left = Evaluate(expression.Left, path);
+        if (left.Failed)
+            return left;
+        if (expression.Operator == TokenKind.AndAnd && left.Value!.Value is false)
+            return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, false));
+        if (expression.Operator == TokenKind.OrOr && left.Value!.Value is true)
+            return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, true));
+        var right = Evaluate(expression.Right, path);
+        if (right.Failed)
+            return right;
         try
         {
-            var l = left.Value!; var r = right.Value!;
+            var l = left.Value!;
+            var r = right.Value!;
             object value;
             if (expression.Operator is TokenKind.EqualEqual or TokenKind.BangEqual)
             {
                 var equality = _engine.GetTypeEntry(l.Type).Equality!;
-                var equal = equality.CompareEqual(l.Value, r.Value); value = expression.Operator == TokenKind.EqualEqual ? equal : !equal;
+                var equal = equality.CompareEqual(l.Value, r.Value);
+                value = expression.Operator == TokenKind.EqualEqual ? equal : !equal;
             }
             else if (expression.Operator is TokenKind.Less or TokenKind.LessEqual or TokenKind.Greater or TokenKind.GreaterEqual)
             {
                 var compare = _engine.GetTypeEntry(l.Type).Ordering!.Compare(l.Value, r.Value);
-                value = expression.Operator switch { TokenKind.Less => compare < 0, TokenKind.LessEqual => compare <= 0, TokenKind.Greater => compare > 0, _ => compare >= 0 };
+                value = expression.Operator switch
+                {
+                    TokenKind.Less => compare < 0,
+                    TokenKind.LessEqual => compare <= 0,
+                    TokenKind.Greater => compare > 0,
+                    _ => compare >= 0
+                };
             }
             else if (expression.Operator is TokenKind.AndAnd or TokenKind.OrOr)
                 value = expression.Operator == TokenKind.AndAnd ? (bool)l.Value && (bool)r.Value : (bool)l.Value || (bool)r.Value;
-            else value = Arithmetic(expression.Operator, l.Type, l.Value, r.Value, expression.Span);
+            else
+                value = Arithmetic(expression.Operator, l.Type, l.Value, r.Value, expression.Span);
             return value is EvalOutcome fault ? fault : EvalOutcome.Success(_engine.CreateValue(expression.Type, value));
         }
         catch (OverflowException) { return CoreFault("SL4002", "Integer overflow.", expression.Span); }
@@ -157,16 +211,62 @@ internal sealed class Evaluator
 
     private object Arithmetic(TokenKind op, ShellTypeId type, object l, object r, SourceSpan span)
     {
-        if ((op is TokenKind.Slash or TokenKind.Percent) && IsZero(type, r)) return CoreFault("SL4003", "Division by zero.", span);
+        if ((op is TokenKind.Slash or TokenKind.Percent) && IsZero(type, r))
+            return CoreFault("SL4003", "Division by zero.", span);
         checked
         {
-            if (type == _engine.Core.Int32) return op switch { TokenKind.Plus => (int)l + (int)r, TokenKind.Minus => (int)l - (int)r, TokenKind.Star => (int)l * (int)r, TokenKind.Slash => (int)l / (int)r, _ => (int)l % (int)r };
-            if (type == _engine.Core.Int64) return op switch { TokenKind.Plus => (long)l + (long)r, TokenKind.Minus => (long)l - (long)r, TokenKind.Star => (long)l * (long)r, TokenKind.Slash => (long)l / (long)r, _ => (long)l % (long)r };
-            if (type == _engine.Core.UInt32) return op switch { TokenKind.Plus => (uint)l + (uint)r, TokenKind.Minus => (uint)l - (uint)r, TokenKind.Star => (uint)l * (uint)r, TokenKind.Slash => (uint)l / (uint)r, _ => (uint)l % (uint)r };
-            if (type == _engine.Core.UInt64) return op switch { TokenKind.Plus => (ulong)l + (ulong)r, TokenKind.Minus => (ulong)l - (ulong)r, TokenKind.Star => (ulong)l * (ulong)r, TokenKind.Slash => (ulong)l / (ulong)r, _ => (ulong)l % (ulong)r };
+            if (type == _engine.Core.Int32)
+                return op switch
+                {
+                    TokenKind.Plus => (int)l + (int)r,
+                    TokenKind.Minus => (int)l - (int)r,
+                    TokenKind.Star => (int)l * (int)r,
+                    TokenKind.Slash => (int)l / (int)r,
+                    _ => (int)l % (int)r
+                };
+            if (type == _engine.Core.Int64)
+                return op switch
+                {
+                    TokenKind.Plus => (long)l + (long)r,
+                    TokenKind.Minus => (long)l - (long)r,
+                    TokenKind.Star => (long)l * (long)r,
+                    TokenKind.Slash => (long)l / (long)r,
+                    _ => (long)l % (long)r
+                };
+            if (type == _engine.Core.UInt32)
+                return op switch
+                {
+                    TokenKind.Plus => (uint)l + (uint)r,
+                    TokenKind.Minus => (uint)l - (uint)r,
+                    TokenKind.Star => (uint)l * (uint)r,
+                    TokenKind.Slash => (uint)l / (uint)r,
+                    _ => (uint)l % (uint)r
+                };
+            if (type == _engine.Core.UInt64)
+                return op switch
+                {
+                    TokenKind.Plus => (ulong)l + (ulong)r,
+                    TokenKind.Minus => (ulong)l - (ulong)r,
+                    TokenKind.Star => (ulong)l * (ulong)r,
+                    TokenKind.Slash => (ulong)l / (ulong)r,
+                    _ => (ulong)l % (ulong)r
+                };
         }
-        if (type == _engine.Core.Float32) return op switch { TokenKind.Plus => (float)l + (float)r, TokenKind.Minus => (float)l - (float)r, TokenKind.Star => (float)l * (float)r, _ => (float)l / (float)r };
-        return op switch { TokenKind.Plus => (double)l + (double)r, TokenKind.Minus => (double)l - (double)r, TokenKind.Star => (double)l * (double)r, _ => (double)l / (double)r };
+        if (type == _engine.Core.Float32)
+            return op switch
+            {
+                TokenKind.Plus => (float)l + (float)r,
+                TokenKind.Minus => (float)l - (float)r,
+                TokenKind.Star => (float)l * (float)r,
+                _ => (float)l / (float)r
+            };
+        return op switch
+        {
+            TokenKind.Plus => (double)l + (double)r,
+            TokenKind.Minus => (double)l - (double)r,
+            TokenKind.Star => (double)l * (double)r,
+            _ => (double)l / (double)r
+        };
     }
 
     private bool IsZero(ShellTypeId type, object value) => type == _engine.Core.Int32 ? (int)value == 0 : type == _engine.Core.Int64 ? (long)value == 0 :
@@ -175,8 +275,11 @@ internal sealed class Evaluator
 
     private EvalOutcome EvaluateApply(BoundApplyExpression expression, IReadOnlyList<int> path)
     {
-        var primary = Evaluate(expression.Primary, path); if (primary.Failed) return primary;
-        if (primary.Value is null) return EvalOutcome.Host(new HostFault("SL5013", "Void cannot feed an operation.", expression.Span));
+        var primary = Evaluate(expression.Primary, path);
+        if (primary.Failed)
+            return primary;
+        if (primary.Value is null)
+            return EvalOutcome.Host(new HostFault("SL5013", "Void cannot feed an operation.", expression.Span));
         if (HasBlockingOuterError(expression.Adaptation, primary.Value, out var propagated))
             return EvalOutcome.Success(RetypeResult(propagated!, expression.Type));
 
@@ -185,7 +288,8 @@ internal sealed class Evaluator
             direct!.Value is bool boolean && ((logical.Operator == TokenKind.AndAnd && !boolean) || (logical.Operator == TokenKind.OrOr && boolean)))
         {
             var shortCircuit = ApplyPlan(expression.Adaptation, primary.Value, logical, new Dictionary<string, ShellValue>(), new Dictionary<string, ShellValue>(), path);
-            if (shortCircuit.Failed || expression.Type == expression.Adaptation.OutputType) return shortCircuit;
+            if (shortCircuit.Failed || expression.Type == expression.Adaptation.OutputType)
+                return shortCircuit;
             var shortEntry = _engine.GetTypeEntry(expression.Adaptation.OutputType);
             return shortEntry.Kind == ShellTypeKind.Result
                 ? EvalOutcome.Success(RetypeResult(shortCircuit.Value!, expression.Type))
@@ -196,11 +300,16 @@ internal sealed class Evaluator
         var arguments = new Dictionary<string, ShellValue>(StringComparer.Ordinal);
         foreach (var secondary in expression.Secondary)
         {
-            var evaluated = Evaluate(secondary.Expression, path); if (evaluated.Failed) return evaluated;
-            if (evaluated.Value is null) return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
+            var evaluated = Evaluate(secondary.Expression, path);
+            if (evaluated.Failed)
+                return evaluated;
+            if (evaluated.Value is null)
+                return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
             var adapted = AdaptSecondary(evaluated.Value, secondary.Adaptation, secondary.Span);
-            if (adapted.Failed) return adapted;
-            if (adapted.Value is null) return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
+            if (adapted.Failed)
+                return adapted;
+            if (adapted.Value is null)
+                return EvalOutcome.Host(new HostFault("SL5014", $"Secondary '{secondary.Name}' produced Void.", secondary.Span));
             var adaptedEntry = _engine.GetTypeEntry(adapted.Value.Type);
             if (adaptedEntry.Kind == ShellTypeKind.Result && adapted.Value.Value is ShellResultValue.Error)
                 return EvalOutcome.Success(RetypeResult(adapted.Value, expression.Type));
@@ -208,14 +317,18 @@ internal sealed class Evaluator
         }
         if (expression.Operation is BoundCommandOperation command)
             foreach (var argument in command.Command.Arguments)
-                if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null) arguments.Add(argument.Name, argument.DefaultValue);
+                if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null)
+                    arguments.Add(argument.Name, argument.DefaultValue);
         if (expression.Operation is BoundQueryOperation query)
             foreach (var argument in query.Query.Arguments)
-                if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null) arguments.Add(argument.Name, argument.DefaultValue);
+                if (!arguments.ContainsKey(argument.Name) && argument.DefaultValue is not null)
+                    arguments.Add(argument.Name, argument.DefaultValue);
         var applied = ApplyPlan(expression.Adaptation, primary.Value, expression.Operation, inputs, arguments, path);
-        if (applied.Failed || expression.Type == expression.Adaptation.OutputType) return applied;
+        if (applied.Failed || expression.Type == expression.Adaptation.OutputType)
+            return applied;
         var baseEntry = _engine.GetTypeEntry(expression.Adaptation.OutputType);
-        if (baseEntry.Kind == ShellTypeKind.Result) return EvalOutcome.Success(RetypeResult(applied.Value!, expression.Type));
+        if (baseEntry.Kind == ShellTypeKind.Result)
+            return EvalOutcome.Success(RetypeResult(applied.Value!, expression.Type));
         return EvalOutcome.Success(expression.Adaptation.OutputType == _engine.Core.Void
             ? new ShellValue(expression.Type, new ShellResultValue.VoidSuccess())
             : new ShellValue(expression.Type, new ShellResultValue.Success(applied.Value!)));
@@ -224,15 +337,21 @@ internal sealed class Evaluator
     private bool HasBlockingOuterError(AdaptationPlan plan, ShellValue value, out ShellValue? error)
     {
         error = null;
-        if (plan.Kind == AdaptationKind.Array || plan.Kind == AdaptationKind.Direct) return false;
+        if (plan.Kind == AdaptationKind.Array || plan.Kind == AdaptationKind.Direct)
+            return false;
         if (plan.Kind == AdaptationKind.DefaultOutput)
         {
             var record = (ShellOutputRecordValue)value.Value;
             return HasBlockingOuterError(plan.Inner!, record.Fields[plan.OutputField!], out error);
         }
         var result = (ShellResultValue)value.Value;
-        if (result is ShellResultValue.Error) { error = value; return true; }
-        if (result is ShellResultValue.Success success) return HasBlockingOuterError(plan.Inner!, success.Value, out error);
+        if (result is ShellResultValue.Error)
+        {
+            error = value;
+            return true;
+        }
+        if (result is ShellResultValue.Success success)
+            return HasBlockingOuterError(plan.Inner!, success.Value, out error);
         return false;
     }
 
@@ -241,9 +360,15 @@ internal sealed class Evaluator
     private bool TryDirectValue(AdaptationPlan plan, ShellValue value, out ShellValue? direct)
     {
         direct = null;
-        if (plan.Kind == AdaptationKind.Direct) { direct = value; return true; }
-        if (plan.Kind == AdaptationKind.DefaultOutput) return TryDirectValue(plan.Inner!, ((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!], out direct);
-        if (plan.Kind == AdaptationKind.Result && value.Value is ShellResultValue.Success success) return TryDirectValue(plan.Inner!, success.Value, out direct);
+        if (plan.Kind == AdaptationKind.Direct)
+        {
+            direct = value;
+            return true;
+        }
+        if (plan.Kind == AdaptationKind.DefaultOutput)
+            return TryDirectValue(plan.Inner!, ((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!], out direct);
+        if (plan.Kind == AdaptationKind.Result && value.Value is ShellResultValue.Success success)
+            return TryDirectValue(plan.Inner!, success.Value, out direct);
         return false;
     }
 
@@ -251,15 +376,19 @@ internal sealed class Evaluator
     {
         switch (plan.Kind)
         {
-            case AdaptationKind.Direct: return EvalOutcome.Success(value);
+            case AdaptationKind.Direct:
+                return EvalOutcome.Success(value);
             case AdaptationKind.DefaultOutput:
                 return AdaptSecondary(((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!], plan.Inner!, span);
             case AdaptationKind.Result:
                 var result = (ShellResultValue)value.Value;
-                if (result is ShellResultValue.Error) return EvalOutcome.Success(RetypeResult(value, plan.OutputType));
-                if (result is ShellResultValue.Success success) return AdaptSecondary(success.Value, plan.Inner!, span);
+                if (result is ShellResultValue.Error)
+                    return EvalOutcome.Success(RetypeResult(value, plan.OutputType));
+                if (result is ShellResultValue.Success success)
+                    return AdaptSecondary(success.Value, plan.Inner!, span);
                 return EvalOutcome.Host(new HostFault("SL5015", "VoidSuccess cannot feed a value parameter.", span));
-            default: return EvalOutcome.Host(new HostFault("SL5016", "Secondary array lifting is forbidden.", span));
+            default:
+                return EvalOutcome.Host(new HostFault("SL5016", "Secondary array lifting is forbidden.", span));
         }
     }
 
@@ -273,31 +402,39 @@ internal sealed class Evaluator
             case AdaptationKind.DefaultOutput:
                 return ApplyPlan(plan.Inner!, ((ShellOutputRecordValue)value.Value).Fields[plan.OutputField!], operation, inputs, arguments, path);
             case AdaptationKind.Result:
-            {
-                var result = (ShellResultValue)value.Value;
-                if (result is ShellResultValue.Error) return EvalOutcome.Success(RetypeResult(value, plan.OutputType));
-                if (result is ShellResultValue.VoidSuccess) return EvalOutcome.Host(new HostFault("SL5015", "VoidSuccess cannot feed an operation.", operation.Span));
-                var inner = ApplyPlan(plan.Inner!, ((ShellResultValue.Success)result).Value, operation, inputs, arguments, path);
-                if (inner.Failed) return inner;
-                return EvalOutcome.Success(WrapPropagated(inner.Value, plan.Inner!.OutputType, plan.OutputType));
-            }
+                {
+                    var result = (ShellResultValue)value.Value;
+                    if (result is ShellResultValue.Error)
+                        return EvalOutcome.Success(RetypeResult(value, plan.OutputType));
+                    if (result is ShellResultValue.VoidSuccess)
+                        return EvalOutcome.Host(new HostFault("SL5015", "VoidSuccess cannot feed an operation.", operation.Span));
+                    var inner = ApplyPlan(plan.Inner!, ((ShellResultValue.Success)result).Value, operation, inputs, arguments, path);
+                    if (inner.Failed)
+                        return inner;
+                    return EvalOutcome.Success(WrapPropagated(inner.Value, plan.Inner!.OutputType, plan.OutputType));
+                }
             case AdaptationKind.Array:
                 return ApplyArray(plan, value, operation, inputs, arguments, path);
-            default: throw new InvalidOperationException();
+            default:
+                throw new InvalidOperationException();
         }
     }
 
     private EvalOutcome ApplyArray(AdaptationPlan plan, ShellValue value, BoundOperation operation,
         IReadOnlyDictionary<string, ShellValue> inputs, IReadOnlyDictionary<string, ShellValue> arguments, IReadOnlyList<int> path)
     {
-        var array = (ShellArrayValue)value.Value; var collected = new List<ShellValue>();
+        var array = (ShellArrayValue)value.Value;
+        var collected = new List<ShellValue>();
         for (var i = 0; i < array.Items.Count; i++)
         {
             var childPath = Append(path, i);
             var outcome = ApplyPlan(plan.Inner!, array.Items[i], operation, inputs, arguments, childPath);
-            if (outcome.RuntimeFault is { } rf) return EvalOutcome.Runtime(operation is BoundCommandOperation ? rf : AddIndex(rf, i));
-            if (outcome.HostFault is { } hf) return EvalOutcome.Host(AddIndex(hf, i));
-            if (plan.Inner!.OutputType == _engine.Core.Void) continue;
+            if (outcome.RuntimeFault is { } rf)
+                return EvalOutcome.Runtime(operation is BoundCommandOperation ? rf : AddIndex(rf, i));
+            if (outcome.HostFault is { } hf)
+                return EvalOutcome.Host(AddIndex(hf, i));
+            if (plan.Inner!.OutputType == _engine.Core.Void)
+                continue;
             var innerEntry = _engine.GetTypeEntry(plan.Inner.OutputType);
             if (innerEntry.Kind == ShellTypeKind.Result)
             {
@@ -307,15 +444,19 @@ internal sealed class Evaluator
                     var frames = new[] { new ErrorContextFrame("array", i.ToString(), operation.Span, i) }.Concat(error.Frames).ToArray();
                     return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.Error(error.Value, frames)));
                 }
-                if (result is ShellResultValue.Success success) collected.Add(success.Value);
+                if (result is ShellResultValue.Success success)
+                    collected.Add(success.Value);
             }
-            else if (outcome.Value is not null) collected.Add(outcome.Value);
+            else if (outcome.Value is not null)
+                collected.Add(outcome.Value);
         }
-        if (plan.OutputType == _engine.Core.Void) return EvalOutcome.Success(null);
+        if (plan.OutputType == _engine.Core.Void)
+            return EvalOutcome.Success(null);
         var outputEntry = _engine.GetTypeEntry(plan.OutputType);
         if (outputEntry.Kind == ShellTypeKind.Result)
         {
-            if (outputEntry.SuccessType == _engine.Core.Void) return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.VoidSuccess()));
+            if (outputEntry.SuccessType == _engine.Core.Void)
+                return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.VoidSuccess()));
             var arrayType = outputEntry.SuccessType!.Value;
             return EvalOutcome.Success(new ShellValue(plan.OutputType, new ShellResultValue.Success(new ShellValue(arrayType, new ShellArrayValue(collected)))));
         }
@@ -367,11 +508,18 @@ internal sealed class Evaluator
             else if (operation.Operator is TokenKind.Less or TokenKind.LessEqual or TokenKind.Greater or TokenKind.GreaterEqual)
             {
                 var compare = _engine.GetTypeEntry(left.Type).Ordering!.Compare(left.Value, right.Value);
-                value = operation.Operator switch { TokenKind.Less => compare < 0, TokenKind.LessEqual => compare <= 0, TokenKind.Greater => compare > 0, _ => compare >= 0 };
+                value = operation.Operator switch
+                {
+                    TokenKind.Less => compare < 0,
+                    TokenKind.LessEqual => compare <= 0,
+                    TokenKind.Greater => compare > 0,
+                    _ => compare >= 0
+                };
             }
             else if (operation.Operator is TokenKind.AndAnd or TokenKind.OrOr)
                 value = operation.Operator == TokenKind.AndAnd ? left.Get<bool>() && right.Get<bool>() : left.Get<bool>() || right.Get<bool>();
-            else value = Arithmetic(operation.Operator, left.Type, left.Value, right.Value, operation.Span);
+            else
+                value = Arithmetic(operation.Operator, left.Type, left.Value, right.Value, operation.Span);
             return value is EvalOutcome fault ? fault : EvalOutcome.Success(_engine.CreateValue(operation.DirectOutput, value));
         }
         catch (OverflowException) { return CoreFault("SL4002", "Integer overflow.", operation.Span); }
@@ -401,13 +549,16 @@ internal sealed class Evaluator
             if (outcome is QueryOutcome.Success success)
             {
                 var valid = ValidateValue(success.Value, operation.Query.OutputType, operation.Span, $"query '{operation.Query.Name}'");
-                if (valid.Failed) return valid;
+                if (valid.Failed)
+                    return valid;
                 return operation.Query.ErrorType is { } error
                     ? EvalOutcome.Success(new ShellValue(operation.DirectOutput, new ShellResultValue.Success(valid.Value!))) : valid;
             }
-            if (operation.Query.ErrorType is not { } declared) return EvalOutcome.Host(new HostFault("SL5104", $"Query '{operation.Query.Name}' returned an undeclared error.", operation.Span));
+            if (operation.Query.ErrorType is not { } declared)
+                return EvalOutcome.Host(new HostFault("SL5104", $"Query '{operation.Query.Name}' returned an undeclared error.", operation.Span));
             var errorValue = ((QueryOutcome.Error)outcome).Value;
-            if (!_engine.IsAssignable(errorValue.Type, declared)) return EvalOutcome.Host(new HostFault("SL5105", $"Query '{operation.Query.Name}' returned the wrong error type.", operation.Span));
+            if (!_engine.IsAssignable(errorValue.Type, declared))
+                return EvalOutcome.Host(new HostFault("SL5105", $"Query '{operation.Query.Name}' returned the wrong error type.", operation.Span));
             return EvalOutcome.Success(new ShellValue(operation.DirectOutput, new ShellResultValue.Error(errorValue)));
         }
         catch (Exception ex) { return EvalOutcome.Host(new HostFault("SL5106", $"Query '{operation.Query.Name}' failed.", operation.Span, ex)); }
@@ -417,7 +568,8 @@ internal sealed class Evaluator
         IReadOnlyDictionary<string, ShellValue> suppliedInputs, IReadOnlyDictionary<string, ShellValue> arguments, IReadOnlyList<int> path)
     {
         var inputs = new Dictionary<string, ShellValue>(suppliedInputs, StringComparer.Ordinal);
-        if (operation.PrimaryPort is not null) inputs[operation.PrimaryPort] = primary;
+        if (operation.PrimaryPort is not null)
+            inputs[operation.PrimaryPort] = primary;
         try
         {
             var values = new InvocationValues(new ReadOnlyDictionary<string, ShellValue>(inputs), arguments);
@@ -449,7 +601,8 @@ internal sealed class Evaluator
         foreach (var output in operation.Command.Outputs)
         {
             var valid = ValidateValue(success.Outputs[output.Name], output.Type, operation.Span, $"output '{operation.Command.Name}.{output.Name}'");
-            if (valid.Failed) return valid;
+            if (valid.Failed)
+                return valid;
         }
         ShellValue? value = operation.Command.Outputs.Count switch
         {
@@ -457,7 +610,8 @@ internal sealed class Evaluator
             1 => success.Outputs[operation.Command.Outputs[0].Name],
             _ => new ShellValue(operation.Command.OutputRecordType!.Value, new ShellOutputRecordValue(success.Outputs))
         };
-        if (operation.Command.ErrorType is not { }) return EvalOutcome.Success(value);
+        if (operation.Command.ErrorType is not { })
+            return EvalOutcome.Success(value);
         return value is null
             ? EvalOutcome.Success(new ShellValue(operation.DirectOutput, new ShellResultValue.VoidSuccess()))
             : EvalOutcome.Success(new ShellValue(operation.DirectOutput, new ShellResultValue.Success(value)));
@@ -471,10 +625,12 @@ internal sealed class Evaluator
         var array = (ShellArrayValue)primary.Value;
         switch (operation.Intrinsic)
         {
-            case IntrinsicKind.Count: return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Int32, array.Items.Count));
+            case IntrinsicKind.Count:
+                return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Int32, array.Items.Count));
             case IntrinsicKind.Take:
                 var count = arguments["count"].Get<int>();
-                if (count < 0) return CoreFault("SL4004", "take count cannot be negative.", operation.Span);
+                if (count < 0)
+                    return CoreFault("SL4004", "take count cannot be negative.", operation.Span);
                 return EvalOutcome.Success(new ShellValue(primary.Type, new ShellArrayValue(array.Items.Take(count))));
             case IntrinsicKind.First:
                 return EmptyOrValue(operation, array, array.Items.FirstOrDefault());
@@ -483,7 +639,10 @@ internal sealed class Evaluator
             case IntrinsicKind.Max:
                 return EmptyOrValue(operation, array, Extreme(array, true, operation.Span));
             case IntrinsicKind.Sum:
-                try { return EvalOutcome.Success(Sum(array, _engine.GetTypeEntry(primary.Type).ElementType!.Value)); }
+                try
+                {
+                    return EvalOutcome.Success(Sum(array, _engine.GetTypeEntry(primary.Type).ElementType!.Value));
+                }
                 catch (OverflowException) { return CoreFault("SL4002", "Integer overflow in sum.", operation.Span); }
             case IntrinsicKind.Average:
                 return Average(operation, array);
@@ -491,7 +650,8 @@ internal sealed class Evaluator
                 return ContextWhere(operation, primary, array, path);
             case IntrinsicKind.Sort:
                 return ContextSort(operation, primary, array, path);
-            default: return EvalOutcome.Host(new HostFault("SL5112", "Unknown intrinsic.", operation.Span));
+            default:
+                return EvalOutcome.Host(new HostFault("SL5112", "Unknown intrinsic.", operation.Span));
         }
     }
 
@@ -500,15 +660,18 @@ internal sealed class Evaluator
         var result = (ShellResultValue)primary.Value;
         switch (operation.Intrinsic)
         {
-            case IntrinsicKind.IsOk: return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, result is not ShellResultValue.Error));
+            case IntrinsicKind.IsOk:
+                return EvalOutcome.Success(_engine.CreateValue(_engine.Core.Bool, result is not ShellResultValue.Error));
             case IntrinsicKind.Require:
-                if (result is ShellResultValue.Error error) return CoreFault("SL4001", error.Value.ToString(), operation.Span);
+                if (result is ShellResultValue.Error error)
+                    return CoreFault("SL4001", error.Value.ToString(), operation.Span);
                 return result is ShellResultValue.VoidSuccess ? EvalOutcome.Success(null) : EvalOutcome.Success(((ShellResultValue.Success)result).Value);
             case IntrinsicKind.ValueOr:
                 return EvalOutcome.Success(result is ShellResultValue.Error ? arguments["default"] : ((ShellResultValue.Success)result).Value);
             case IntrinsicKind.Error:
                 return result is ShellResultValue.Error e ? EvalOutcome.Success(e.Value) : CoreFault("SL4005", "error requires an Err value.", operation.Span);
-            default: throw new InvalidOperationException();
+            default:
+                throw new InvalidOperationException();
         }
     }
 
@@ -525,14 +688,17 @@ internal sealed class Evaluator
 
     private ShellValue? Extreme(ShellArrayValue array, bool max, SourceSpan span)
     {
-        if (array.Items.Count == 0) return null;
-        var ordering = _engine.GetTypeEntry(array.Items[0].Type).Ordering!; var best = array.Items[0];
+        if (array.Items.Count == 0)
+            return null;
+        var ordering = _engine.GetTypeEntry(array.Items[0].Type).Ordering!;
+        var best = array.Items[0];
         try
         {
             foreach (var item in array.Items.Skip(1))
             {
                 var compare = ordering.Compare(item.Value, best.Value);
-                if (max ? compare > 0 : compare < 0) best = item;
+                if (max ? compare > 0 : compare < 0)
+                    best = item;
             }
         }
         catch (Exception ex) { throw new InvalidOperationException("Registered ordering failed.", ex); }
@@ -542,19 +708,28 @@ internal sealed class Evaluator
     private ShellValue Sum(ShellArrayValue array, ShellTypeId type)
     {
         object sum;
-        if (type == _engine.Core.Int32) sum = array.Items.Aggregate(0, (a, x) => checked(a + x.Get<int>()));
-        else if (type == _engine.Core.Int64) sum = array.Items.Aggregate(0L, (a, x) => checked(a + x.Get<long>()));
-        else if (type == _engine.Core.UInt32) sum = array.Items.Aggregate(0U, (a, x) => checked(a + x.Get<uint>()));
-        else if (type == _engine.Core.UInt64) sum = array.Items.Aggregate(0UL, (a, x) => checked(a + x.Get<ulong>()));
-        else if (type == _engine.Core.Float32) sum = array.Items.Aggregate(0F, (a, x) => a + x.Get<float>());
-        else sum = array.Items.Aggregate(0D, (a, x) => a + x.Get<double>());
+        if (type == _engine.Core.Int32)
+            sum = array.Items.Aggregate(0, (a, x) => checked(a + x.Get<int>()));
+        else if (type == _engine.Core.Int64)
+            sum = array.Items.Aggregate(0L, (a, x) => checked(a + x.Get<long>()));
+        else if (type == _engine.Core.UInt32)
+            sum = array.Items.Aggregate(0U, (a, x) => checked(a + x.Get<uint>()));
+        else if (type == _engine.Core.UInt64)
+            sum = array.Items.Aggregate(0UL, (a, x) => checked(a + x.Get<ulong>()));
+        else if (type == _engine.Core.Float32)
+            sum = array.Items.Aggregate(0F, (a, x) => a + x.Get<float>());
+        else
+            sum = array.Items.Aggregate(0D, (a, x) => a + x.Get<double>());
         return _engine.CreateValue(type, sum);
     }
 
     private EvalOutcome Average(BoundIntrinsicOperation operation, ShellArrayValue array)
     {
-        if (array.Items.Count == 0) return EmptyOrValue(operation, array, null);
-        var input = array.Items[0].Type; var resultEntry = _engine.GetTypeEntry(operation.DirectOutput); var output = resultEntry.SuccessType!.Value;
+        if (array.Items.Count == 0)
+            return EmptyOrValue(operation, array, null);
+        var input = array.Items[0].Type;
+        var resultEntry = _engine.GetTypeEntry(operation.DirectOutput);
+        var output = resultEntry.SuccessType!.Value;
         object value = input == _engine.Core.Float32 ? array.Items.Average(x => x.Get<float>()) :
             input == _engine.Core.Float64 ? array.Items.Average(x => x.Get<double>()) :
             input == _engine.Core.Int32 ? array.Items.Average(x => (double)x.Get<int>()) :
@@ -566,13 +741,16 @@ internal sealed class Evaluator
 
     private EvalOutcome ContextWhere(BoundIntrinsicOperation operation, ShellValue primary, ShellArrayValue array, IReadOnlyList<int> path)
     {
-        var result = new List<ShellValue>(); var old = _contextValue;
+        var result = new List<ShellValue>();
+        var old = _contextValue;
         try
         {
             for (var i = 0; i < array.Items.Count; i++)
             {
-                _contextValue = array.Items[i]; var predicate = Evaluate(operation.ContextExpression!, Append(path, i));
-                if (predicate.Failed) return predicate;
+                _contextValue = array.Items[i];
+                var predicate = Evaluate(operation.ContextExpression!, Append(path, i));
+                if (predicate.Failed)
+                    return predicate;
                 var predicateValue = predicate.Value!;
                 if (_engine.GetTypeEntry(predicateValue.Type).Kind == ShellTypeKind.Result)
                 {
@@ -584,7 +762,8 @@ internal sealed class Evaluator
                     }
                     predicateValue = ((ShellResultValue.Success)contextualResult).Value;
                 }
-                if (predicateValue.Get<bool>()) result.Add(array.Items[i]);
+                if (predicateValue.Get<bool>())
+                    result.Add(array.Items[i]);
             }
         }
         finally { _contextValue = old; }
@@ -596,12 +775,16 @@ internal sealed class Evaluator
 
     private EvalOutcome ContextSort(BoundIntrinsicOperation operation, ShellValue primary, ShellArrayValue array, IReadOnlyList<int> path)
     {
-        var keyed = new List<(ShellValue Item, ShellValue Key, int Index)>(); var old = _contextValue;
+        var keyed = new List<(ShellValue Item, ShellValue Key, int Index)>();
+        var old = _contextValue;
         try
         {
             for (var i = 0; i < array.Items.Count; i++)
             {
-                _contextValue = array.Items[i]; var key = Evaluate(operation.ContextExpression!, Append(path, i)); if (key.Failed) return key;
+                _contextValue = array.Items[i];
+                var key = Evaluate(operation.ContextExpression!, Append(path, i));
+                if (key.Failed)
+                    return key;
                 var keyValue = key.Value!;
                 if (_engine.GetTypeEntry(keyValue.Type).Kind == ShellTypeKind.Result)
                 {
@@ -624,7 +807,8 @@ internal sealed class Evaluator
             var ordering = _engine.GetTypeEntry(keyType).Ordering!;
             var sorted = keyed.OrderBy(x => x, Comparer<(ShellValue Item, ShellValue Key, int Index)>.Create((a, b) =>
             {
-                var compare = ordering.Compare(a.Key.Value, b.Key.Value); return compare != 0 ? compare : a.Index.CompareTo(b.Index);
+                var compare = ordering.Compare(a.Key.Value, b.Key.Value);
+                return compare != 0 ? compare : a.Index.CompareTo(b.Index);
             })).Select(x => x.Item);
             var sortedValue = new ShellValue(primary.Type, new ShellArrayValue(sorted));
             return _engine.GetTypeEntry(operation.DirectOutput).Kind == ShellTypeKind.Result
@@ -636,18 +820,23 @@ internal sealed class Evaluator
 
     private EvalOutcome ValidateValue(ShellValue? value, ShellTypeId expected, SourceSpan span, string boundary)
     {
-        if (value is null) return EvalOutcome.Host(new HostFault("SL5114", $"The {boundary} returned null.", span));
-        if (!_engine.IsAssignable(value.Type, expected)) return EvalOutcome.Host(new HostFault("SL5115", $"The {boundary} returned {_engine.TypeName(value.Type)} instead of {_engine.TypeName(expected)}.", span));
+        if (value is null)
+            return EvalOutcome.Host(new HostFault("SL5114", $"The {boundary} returned null.", span));
+        if (!_engine.IsAssignable(value.Type, expected))
+            return EvalOutcome.Host(new HostFault("SL5115", $"The {boundary} returned {_engine.TypeName(value.Type)} instead of {_engine.TypeName(expected)}.", span));
         var entry = _engine.GetTypeEntry(value.Type);
-        if (entry.Adapter is not null && !entry.Adapter.IsValid(value.Value)) return EvalOutcome.Host(new HostFault("SL5116", $"The {boundary} returned an invalid CLR value.", span));
+        if (entry.Adapter is not null && !entry.Adapter.IsValid(value.Value))
+            return EvalOutcome.Host(new HostFault("SL5116", $"The {boundary} returned an invalid CLR value.", span));
         return EvalOutcome.Success(value);
     }
 
     private ShellValue? WrapPropagated(ShellValue? inner, ShellTypeId innerType, ShellTypeId outputType)
     {
         var innerEntry = _engine.GetTypeEntry(innerType);
-        if (innerEntry.Kind == ShellTypeKind.Result) return RetypeResult(inner!, outputType);
-        if (innerType == _engine.Core.Void) return new ShellValue(outputType, new ShellResultValue.VoidSuccess());
+        if (innerEntry.Kind == ShellTypeKind.Result)
+            return RetypeResult(inner!, outputType);
+        if (innerType == _engine.Core.Void)
+            return new ShellValue(outputType, new ShellResultValue.VoidSuccess());
         return new ShellValue(outputType, new ShellResultValue.Success(inner!));
     }
 

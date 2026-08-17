@@ -15,8 +15,14 @@ public delegate CommandOutcome CommandInvoker(InvocationContext context, Invocat
 
 public abstract class ValueAdapter
 {
-    internal ShellTypeId TypeId { get; set; }
-    public abstract Type ClrType { get; }
+    internal ShellTypeId TypeId
+    {
+        get; set;
+    }
+    public abstract Type ClrType
+    {
+        get;
+    }
     public abstract bool IsValid(object value);
     public abstract object GetClrValue(ShellValue value);
     public abstract ShellValue CreateShellValue(object value);
@@ -34,7 +40,8 @@ public sealed class ValueAdapter<T> : ValueAdapter where T : notnull
     }
     public override ShellValue CreateShellValue(object value)
     {
-        if (value is not T) throw new ArgumentException($"Expected {typeof(T).Name}.", nameof(value));
+        if (value is not T)
+            throw new ArgumentException($"Expected {typeof(T).Name}.", nameof(value));
         return new ShellValue(TypeId, value);
     }
     public ShellValue Create(T value) => CreateShellValue(value);
@@ -43,13 +50,19 @@ public sealed class ValueAdapter<T> : ValueAdapter where T : notnull
 public sealed class EqualityDescriptor
 {
     public EqualityDescriptor(Func<object, object, bool> equals) => CompareEqual = equals ?? throw new ArgumentNullException(nameof(equals));
-    public Func<object, object, bool> CompareEqual { get; }
+    public Func<object, object, bool> CompareEqual
+    {
+        get;
+    }
 }
 
 public sealed class OrderingDescriptor
 {
     public OrderingDescriptor(Func<object, object, int> compare) => Compare = compare ?? throw new ArgumentNullException(nameof(compare));
-    public Func<object, object, int> Compare { get; }
+    public Func<object, object, int> Compare
+    {
+        get;
+    }
 }
 
 public sealed class MemberDescriptor
@@ -57,15 +70,36 @@ public sealed class MemberDescriptor
     public MemberDescriptor(string name, string description, ShellTypeId receiverType,
         ShellTypeId valueType, MemberGetter getValue)
     {
-        Name = name; Description = description; ReceiverType = receiverType; ValueType = valueType;
+        Name = name;
+        Description = description;
+        ReceiverType = receiverType;
+        ValueType = valueType;
         GetValue = getValue ?? throw new ArgumentNullException(nameof(getValue));
     }
-    public SymbolId Id { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public ShellTypeId ReceiverType { get; internal set; }
-    public ShellTypeId ValueType { get; }
-    public MemberGetter GetValue { get; }
+    public SymbolId Id
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public ShellTypeId ReceiverType
+    {
+        get; internal set;
+    }
+    public ShellTypeId ValueType
+    {
+        get;
+    }
+    public MemberGetter GetValue
+    {
+        get;
+    }
 }
 
 public sealed class QueryDescriptor
@@ -74,18 +108,46 @@ public sealed class QueryDescriptor
         IEnumerable<ArgumentDescriptor>? arguments, ShellTypeId outputType,
         QueryInvoker invoke, ShellTypeId? errorType = null)
     {
-        Name = name; Description = description; ReceiverType = receiverType;
-        Arguments = Array.AsReadOnly((arguments ?? []).ToArray()); OutputType = outputType;
-        ErrorType = errorType; Invoke = invoke ?? throw new ArgumentNullException(nameof(invoke));
+        Name = name;
+        Description = description;
+        ReceiverType = receiverType;
+        Arguments = Array.AsReadOnly((arguments ?? []).ToArray());
+        OutputType = outputType;
+        ErrorType = errorType;
+        Invoke = invoke ?? throw new ArgumentNullException(nameof(invoke));
     }
-    public SymbolId Id { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public ShellTypeId ReceiverType { get; internal set; }
-    public IReadOnlyList<ArgumentDescriptor> Arguments { get; }
-    public ShellTypeId OutputType { get; }
-    public ShellTypeId? ErrorType { get; }
-    public QueryInvoker Invoke { get; }
+    public SymbolId Id
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public ShellTypeId ReceiverType
+    {
+        get; internal set;
+    }
+    public IReadOnlyList<ArgumentDescriptor> Arguments
+    {
+        get;
+    }
+    public ShellTypeId OutputType
+    {
+        get;
+    }
+    public ShellTypeId? ErrorType
+    {
+        get;
+    }
+    public QueryInvoker Invoke
+    {
+        get;
+    }
 }
 
 public sealed class TypeDescriptor
@@ -95,23 +157,62 @@ public sealed class TypeDescriptor
         IEnumerable<QueryDescriptor>? queries = null, EqualityDescriptor? equality = null,
         OrderingDescriptor? ordering = null)
     {
-        Id = IdentitySource.NextType(); Name = name; Description = description; ClrType = clrType; Adapter = adapter;
+        Id = IdentitySource.NextType();
+        Name = name;
+        Description = description;
+        ClrType = clrType;
+        Adapter = adapter;
         adapter.TypeId = Id;
         DirectBases = Array.AsReadOnly((directBases ?? []).ToArray());
-        Members = Array.AsReadOnly((members ?? []).ToArray()); Queries = Array.AsReadOnly((queries ?? []).ToArray());
-        Equality = equality; Ordering = ordering;
+        Members = Array.AsReadOnly((members ?? []).ToArray());
+        Queries = Array.AsReadOnly((queries ?? []).ToArray());
+        Equality = equality;
+        Ordering = ordering;
     }
-    public ShellTypeId Id { get; }
-    public SymbolId SymbolId { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public Type ClrType { get; }
-    public IReadOnlyList<ShellTypeId> DirectBases { get; }
-    public ValueAdapter Adapter { get; }
-    public IReadOnlyList<MemberDescriptor> Members { get; }
-    public IReadOnlyList<QueryDescriptor> Queries { get; }
-    public EqualityDescriptor? Equality { get; }
-    public OrderingDescriptor? Ordering { get; }
+    public ShellTypeId Id
+    {
+        get;
+    }
+    public SymbolId SymbolId
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public Type ClrType
+    {
+        get;
+    }
+    public IReadOnlyList<ShellTypeId> DirectBases
+    {
+        get;
+    }
+    public ValueAdapter Adapter
+    {
+        get;
+    }
+    public IReadOnlyList<MemberDescriptor> Members
+    {
+        get;
+    }
+    public IReadOnlyList<QueryDescriptor> Queries
+    {
+        get;
+    }
+    public EqualityDescriptor? Equality
+    {
+        get;
+    }
+    public OrderingDescriptor? Ordering
+    {
+        get;
+    }
 }
 
 public sealed record EnumMemberDescriptor(string Name, object Value, string Description = "Enum member.");
@@ -121,18 +222,47 @@ public sealed class EnumTypeDescriptor
     public EnumTypeDescriptor(string name, string description, Type clrType, ValueAdapter adapter,
         IEnumerable<EnumMemberDescriptor> members, OrderingDescriptor? ordering = null)
     {
-        Id = IdentitySource.NextType(); Name = name; Description = description; ClrType = clrType; Adapter = adapter;
+        Id = IdentitySource.NextType();
+        Name = name;
+        Description = description;
+        ClrType = clrType;
+        Adapter = adapter;
         adapter.TypeId = Id;
-        Members = Array.AsReadOnly(members.ToArray()); Ordering = ordering;
+        Members = Array.AsReadOnly(members.ToArray());
+        Ordering = ordering;
     }
-    public ShellTypeId Id { get; }
-    public SymbolId SymbolId { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public Type ClrType { get; }
-    public ValueAdapter Adapter { get; }
-    public IReadOnlyList<EnumMemberDescriptor> Members { get; }
-    public OrderingDescriptor? Ordering { get; }
+    public ShellTypeId Id
+    {
+        get;
+    }
+    public SymbolId SymbolId
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public Type ClrType
+    {
+        get;
+    }
+    public ValueAdapter Adapter
+    {
+        get;
+    }
+    public IReadOnlyList<EnumMemberDescriptor> Members
+    {
+        get;
+    }
+    public OrderingDescriptor? Ordering
+    {
+        get;
+    }
 }
 
 public sealed class ErrorTypeDescriptor
@@ -140,71 +270,187 @@ public sealed class ErrorTypeDescriptor
     public ErrorTypeDescriptor(string name, string description, Type clrType, ValueAdapter adapter,
         ShellTypeId baseType)
     {
-        Id = IdentitySource.NextType(); Name = name; Description = description; ClrType = clrType; Adapter = adapter; BaseType = baseType;
+        Id = IdentitySource.NextType();
+        Name = name;
+        Description = description;
+        ClrType = clrType;
+        Adapter = adapter;
+        BaseType = baseType;
         adapter.TypeId = Id;
     }
-    public ShellTypeId Id { get; }
-    public SymbolId SymbolId { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public Type ClrType { get; }
-    public ValueAdapter Adapter { get; }
-    public ShellTypeId BaseType { get; }
+    public ShellTypeId Id
+    {
+        get;
+    }
+    public SymbolId SymbolId
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public Type ClrType
+    {
+        get;
+    }
+    public ValueAdapter Adapter
+    {
+        get;
+    }
+    public ShellTypeId BaseType
+    {
+        get;
+    }
 }
 
 public sealed class GlobalDescriptor
 {
     public GlobalDescriptor(string name, string description, ShellTypeId type, GlobalValueProvider getValue)
     {
-        Name = name; Description = description; Type = type; GetValue = getValue ?? throw new ArgumentNullException(nameof(getValue));
+        Name = name;
+        Description = description;
+        Type = type;
+        GetValue = getValue ?? throw new ArgumentNullException(nameof(getValue));
     }
-    public SymbolId Id { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public ShellTypeId Type { get; }
-    public GlobalValueProvider GetValue { get; }
+    public SymbolId Id
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public ShellTypeId Type
+    {
+        get;
+    }
+    public GlobalValueProvider GetValue
+    {
+        get;
+    }
 }
 
 public sealed class InputPortDescriptor
 {
     public InputPortDescriptor(string name, string description, ShellTypeId type, bool isDefault = false)
-    { Name = name; Description = description; Type = type; IsDefault = isDefault; }
-    public string Name { get; }
-    public string Description { get; }
-    public ShellTypeId Type { get; }
-    public bool IsDefault { get; }
+    {
+        Name = name;
+        Description = description;
+        Type = type;
+        IsDefault = isDefault;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public ShellTypeId Type
+    {
+        get;
+    }
+    public bool IsDefault
+    {
+        get;
+    }
 }
 
 public sealed class ArgumentDescriptor
 {
     public ArgumentDescriptor(string name, string description, ShellTypeId type, int position,
         bool required = true, ShellValue? defaultValue = null)
-    { Name = name; Description = description; Type = type; Position = position; Required = required; DefaultValue = defaultValue; }
-    public string Name { get; }
-    public string Description { get; }
-    public ShellTypeId Type { get; }
-    public int Position { get; }
-    public bool Required { get; }
-    public ShellValue? DefaultValue { get; }
+    {
+        Name = name;
+        Description = description;
+        Type = type;
+        Position = position;
+        Required = required;
+        DefaultValue = defaultValue;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public ShellTypeId Type
+    {
+        get;
+    }
+    public int Position
+    {
+        get;
+    }
+    public bool Required
+    {
+        get;
+    }
+    public ShellValue? DefaultValue
+    {
+        get;
+    }
 }
 
 public sealed class OutputPortDescriptor
 {
     public OutputPortDescriptor(string name, string description, ShellTypeId type, bool isDefault = false)
-    { Name = name; Description = description; Type = type; IsDefault = isDefault; }
-    public string Name { get; }
-    public string Description { get; }
-    public ShellTypeId Type { get; }
-    public bool IsDefault { get; }
+    {
+        Name = name;
+        Description = description;
+        Type = type;
+        IsDefault = isDefault;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public ShellTypeId Type
+    {
+        get;
+    }
+    public bool IsDefault
+    {
+        get;
+    }
 }
 
 public sealed class RuntimeFaultDescriptor
 {
     public RuntimeFaultDescriptor(RuntimeFaultCode code, string name, string description)
-    { Code = code; Name = name; Description = description; }
-    public RuntimeFaultCode Code { get; }
-    public string Name { get; }
-    public string Description { get; }
+    {
+        Code = code;
+        Name = name;
+        Description = description;
+    }
+    public RuntimeFaultCode Code
+    {
+        get;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
 }
 
 public sealed class CommandDescriptor
@@ -214,34 +460,73 @@ public sealed class CommandDescriptor
         CommandInvoker invoke, ShellTypeId? errorType = null,
         IEnumerable<RuntimeFaultCode>? runtimeFaults = null)
     {
-        Name = name; Description = description;
-        Inputs = Array.AsReadOnly((inputs ?? []).ToArray()); Arguments = Array.AsReadOnly((arguments ?? []).ToArray());
-        Outputs = Array.AsReadOnly((outputs ?? []).ToArray()); ErrorType = errorType;
-        RuntimeFaults = Array.AsReadOnly((runtimeFaults ?? []).ToArray()); Invoke = invoke ?? throw new ArgumentNullException(nameof(invoke));
-        if (Outputs.Count > 1) OutputRecordType = IdentitySource.NextType();
+        Name = name;
+        Description = description;
+        Inputs = Array.AsReadOnly((inputs ?? []).ToArray());
+        Arguments = Array.AsReadOnly((arguments ?? []).ToArray());
+        Outputs = Array.AsReadOnly((outputs ?? []).ToArray());
+        ErrorType = errorType;
+        RuntimeFaults = Array.AsReadOnly((runtimeFaults ?? []).ToArray());
+        Invoke = invoke ?? throw new ArgumentNullException(nameof(invoke));
+        if (Outputs.Count > 1)
+            OutputRecordType = IdentitySource.NextType();
     }
-    public SymbolId Id { get; internal set; }
-    public string Name { get; }
-    public string Description { get; }
-    public IReadOnlyList<InputPortDescriptor> Inputs { get; }
-    public IReadOnlyList<ArgumentDescriptor> Arguments { get; }
-    public IReadOnlyList<OutputPortDescriptor> Outputs { get; }
-    public ShellTypeId? ErrorType { get; }
-    public IReadOnlyList<RuntimeFaultCode> RuntimeFaults { get; }
-    public CommandInvoker Invoke { get; }
-    public ShellTypeId? OutputRecordType { get; }
+    public SymbolId Id
+    {
+        get; internal set;
+    }
+    public string Name
+    {
+        get;
+    }
+    public string Description
+    {
+        get;
+    }
+    public IReadOnlyList<InputPortDescriptor> Inputs
+    {
+        get;
+    }
+    public IReadOnlyList<ArgumentDescriptor> Arguments
+    {
+        get;
+    }
+    public IReadOnlyList<OutputPortDescriptor> Outputs
+    {
+        get;
+    }
+    public ShellTypeId? ErrorType
+    {
+        get;
+    }
+    public IReadOnlyList<RuntimeFaultCode> RuntimeFaults
+    {
+        get;
+    }
+    public CommandInvoker Invoke
+    {
+        get;
+    }
+    public ShellTypeId? OutputRecordType
+    {
+        get;
+    }
 }
 
 public abstract record QueryOutcome
 {
-    private QueryOutcome() { }
+    private QueryOutcome()
+    {
+    }
     public sealed record Success(ShellValue Value) : QueryOutcome;
     public sealed record Error(ShellValue Value) : QueryOutcome;
 }
 
 public abstract record CommandOutcome
 {
-    private CommandOutcome() { }
+    private CommandOutcome()
+    {
+    }
     public sealed record Success(IReadOnlyDictionary<string, ShellValue> Outputs) : CommandOutcome
     {
         public static Success Empty { get; } = new(new ReadOnlyDictionary<string, ShellValue>(new Dictionary<string, ShellValue>()));
@@ -257,7 +542,10 @@ public sealed class InvocationValues
     private readonly IReadOnlyDictionary<string, ShellValue> _inputs;
     private readonly IReadOnlyDictionary<string, ShellValue> _arguments;
     internal InvocationValues(IReadOnlyDictionary<string, ShellValue> inputs, IReadOnlyDictionary<string, ShellValue> arguments)
-    { _inputs = inputs; _arguments = arguments; }
+    {
+        _inputs = inputs;
+        _arguments = arguments;
+    }
     public ShellValue GetInput(string name) => _inputs.TryGetValue(name, out var value) ? value : throw new KeyNotFoundException($"Unknown input '{name}'.");
     public ShellValue GetArgument(string name) => _arguments.TryGetValue(name, out var value) ? value : throw new KeyNotFoundException($"Unknown argument '{name}'.");
     public T GetInput<T>(string name) => GetInput(name).Get<T>();
@@ -268,12 +556,33 @@ public sealed class InvocationContext
 {
     internal InvocationContext(ShellEngine engine, ShellSession session, IServiceProvider services,
         SourceSpan source, IReadOnlyList<int> arrayIndexPath)
-    { Engine = engine; Session = session; Services = services; Source = source; ArrayIndexPath = arrayIndexPath; }
-    public ShellEngine Engine { get; }
-    public ShellSession Session { get; }
-    public IServiceProvider Services { get; }
-    public SourceSpan Source { get; }
-    public IReadOnlyList<int> ArrayIndexPath { get; }
+    {
+        Engine = engine;
+        Session = session;
+        Services = services;
+        Source = source;
+        ArrayIndexPath = arrayIndexPath;
+    }
+    public ShellEngine Engine
+    {
+        get;
+    }
+    public ShellSession Session
+    {
+        get;
+    }
+    public IServiceProvider Services
+    {
+        get;
+    }
+    public SourceSpan Source
+    {
+        get;
+    }
+    public IReadOnlyList<int> ArrayIndexPath
+    {
+        get;
+    }
 }
 
 public sealed class DescriptorSet
@@ -282,16 +591,37 @@ public sealed class DescriptorSet
         IEnumerable<ErrorTypeDescriptor>? errors = null, IEnumerable<GlobalDescriptor>? globals = null,
         IEnumerable<CommandDescriptor>? commands = null, IEnumerable<RuntimeFaultDescriptor>? runtimeFaults = null)
     {
-        Types = Array.AsReadOnly((types ?? []).ToArray()); Enums = Array.AsReadOnly((enums ?? []).ToArray());
-        Errors = Array.AsReadOnly((errors ?? []).ToArray()); Globals = Array.AsReadOnly((globals ?? []).ToArray());
-        Commands = Array.AsReadOnly((commands ?? []).ToArray()); RuntimeFaults = Array.AsReadOnly((runtimeFaults ?? []).ToArray());
+        Types = Array.AsReadOnly((types ?? []).ToArray());
+        Enums = Array.AsReadOnly((enums ?? []).ToArray());
+        Errors = Array.AsReadOnly((errors ?? []).ToArray());
+        Globals = Array.AsReadOnly((globals ?? []).ToArray());
+        Commands = Array.AsReadOnly((commands ?? []).ToArray());
+        RuntimeFaults = Array.AsReadOnly((runtimeFaults ?? []).ToArray());
     }
-    public IReadOnlyList<TypeDescriptor> Types { get; }
-    public IReadOnlyList<EnumTypeDescriptor> Enums { get; }
-    public IReadOnlyList<ErrorTypeDescriptor> Errors { get; }
-    public IReadOnlyList<GlobalDescriptor> Globals { get; }
-    public IReadOnlyList<CommandDescriptor> Commands { get; }
-    public IReadOnlyList<RuntimeFaultDescriptor> RuntimeFaults { get; }
+    public IReadOnlyList<TypeDescriptor> Types
+    {
+        get;
+    }
+    public IReadOnlyList<EnumTypeDescriptor> Enums
+    {
+        get;
+    }
+    public IReadOnlyList<ErrorTypeDescriptor> Errors
+    {
+        get;
+    }
+    public IReadOnlyList<GlobalDescriptor> Globals
+    {
+        get;
+    }
+    public IReadOnlyList<CommandDescriptor> Commands
+    {
+        get;
+    }
+    public IReadOnlyList<RuntimeFaultDescriptor> RuntimeFaults
+    {
+        get;
+    }
 }
 
 public static class TypeDescriptorBuilder
@@ -309,8 +639,16 @@ public sealed class TypeDescriptorBuilder<T> where T : notnull
     private EqualityDescriptor? _equality;
     private OrderingDescriptor? _ordering;
     internal TypeDescriptorBuilder(string name) => _name = name;
-    public TypeDescriptorBuilder<T> Description(string value) { _description = value; return this; }
-    public TypeDescriptorBuilder<T> Base(ShellTypeId value) { _bases.Add(value); return this; }
+    public TypeDescriptorBuilder<T> Description(string value)
+    {
+        _description = value;
+        return this;
+    }
+    public TypeDescriptorBuilder<T> Base(ShellTypeId value)
+    {
+        _bases.Add(value);
+        return this;
+    }
     public TypeDescriptorBuilder<T> Member<TValue>(string name, string description, ShellTypeId type, Func<T, TValue> getter) where TValue : notnull
     {
         _members.Add(new MemberDescriptor(name, description, default, type, (context, receiver) =>
@@ -331,8 +669,16 @@ public sealed class TypeDescriptorBuilder<T> where T : notnull
             (context, receiver, values) => invoke(context, receiver.Get<T>(), values), errorType));
         return this;
     }
-    public TypeDescriptorBuilder<T> Equality(Func<T, T, bool> equals) { _equality = new EqualityDescriptor((a, b) => equals((T)a, (T)b)); return this; }
-    public TypeDescriptorBuilder<T> Ordering(Func<T, T, int> compare) { _ordering = new OrderingDescriptor((a, b) => compare((T)a, (T)b)); return this; }
+    public TypeDescriptorBuilder<T> Equality(Func<T, T, bool> equals)
+    {
+        _equality = new EqualityDescriptor((a, b) => equals((T)a, (T)b));
+        return this;
+    }
+    public TypeDescriptorBuilder<T> Ordering(Func<T, T, int> compare)
+    {
+        _ordering = new OrderingDescriptor((a, b) => compare((T)a, (T)b));
+        return this;
+    }
     public TypeDescriptor Build() => new(_name, _description, typeof(T), new ValueAdapter<T>(), _bases, _members, _queries, _equality, _ordering);
 }
 
@@ -352,16 +698,41 @@ public sealed class CommandBuilder
     private ShellTypeId? _error;
     private CommandInvoker? _invoke;
     internal CommandBuilder(string name) => _name = name;
-    public CommandBuilder Description(string value) { _description = value; return this; }
+    public CommandBuilder Description(string value)
+    {
+        _description = value;
+        return this;
+    }
     public CommandBuilder Input<T>(string name, ShellTypeId type, bool isDefault = false, string description = "Input port.") where T : notnull
-    { _inputs.Add(new InputPortDescriptor(name, description, type, isDefault)); return this; }
+    {
+        _inputs.Add(new InputPortDescriptor(name, description, type, isDefault));
+        return this;
+    }
     public CommandBuilder Argument<T>(string name, ShellTypeId type, bool required = true, ShellValue? defaultValue = null, string description = "Argument.") where T : notnull
-    { _arguments.Add(new ArgumentDescriptor(name, description, type, _arguments.Count, required, defaultValue)); return this; }
+    {
+        _arguments.Add(new ArgumentDescriptor(name, description, type, _arguments.Count, required, defaultValue));
+        return this;
+    }
     public CommandBuilder Output<T>(string name, ShellTypeId type, bool isDefault = false, string description = "Output port.") where T : notnull
-    { _outputs.Add(new OutputPortDescriptor(name, description, type, isDefault)); return this; }
-    public CommandBuilder Error(ShellTypeId type) { _error = type; return this; }
-    public CommandBuilder RuntimeFault(RuntimeFaultCode code) { _faults.Add(code); return this; }
-    public CommandBuilder Invoke(CommandInvoker invoke) { _invoke = invoke; return this; }
+    {
+        _outputs.Add(new OutputPortDescriptor(name, description, type, isDefault));
+        return this;
+    }
+    public CommandBuilder Error(ShellTypeId type)
+    {
+        _error = type;
+        return this;
+    }
+    public CommandBuilder RuntimeFault(RuntimeFaultCode code)
+    {
+        _faults.Add(code);
+        return this;
+    }
+    public CommandBuilder Invoke(CommandInvoker invoke)
+    {
+        _invoke = invoke;
+        return this;
+    }
     public CommandDescriptor Build() => new(_name, _description, _inputs, _arguments, _outputs,
         _invoke ?? throw new InvalidOperationException("A command invoker is required."), _error, _faults);
 }
